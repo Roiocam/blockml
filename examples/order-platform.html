@@ -36,7 +36,7 @@
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%2394a3b8' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
     background-repeat:no-repeat;background-position:right 7px center;
   }
-  #blockml-app{position:relative;padding-top:44px}
+  #blockml-app{position:relative;box-sizing:border-box;padding-top:44px}
   #blockml-mount{position:absolute;inset:44px 0 0 0}
 
 .bml-root{
@@ -73,7 +73,12 @@
 .bml-root.bml-readonly .bml-node{cursor:default}
 .bml-grid-dot{fill:var(--bml-grid)}
 .bml-group-box{fill-opacity:.06;stroke-opacity:.3;stroke-width:1.2}
+.bml-group-box.bml-collapsed{fill-opacity:.1;stroke-dasharray:5 4}
 .bml-group-label{font:600 10.5px/1 inherit;letter-spacing:.06em;text-transform:uppercase}
+.bml-group-toggle{cursor:pointer}
+.bml-group-toggle circle{stroke-width:1;transition:stroke-opacity .12s ease,fill .12s ease}
+.bml-group-toggle:hover circle{stroke-opacity:.9;fill:var(--bml-bg)}
+.bml-toggle-sign{font:600 12px/1 inherit;pointer-events:none}
 .bml-node{cursor:grab}
 .bml-node.bml-dragging{cursor:grabbing}
 .bml-node-box{fill:var(--bml-panel);stroke:#dbe2ea;stroke-width:1.2;filter:url(#bml-node-shadow)}
@@ -103,9 +108,9 @@
 .bml-legend{
   position:absolute;left:14px;bottom:14px;display:flex;flex-wrap:wrap;gap:6px 12px;
   max-width:min(560px,60%);padding:9px 11px;font-size:11px;color:var(--bml-ink-2);
-  background:color-mix(in srgb,var(--bml-panel) 92%,transparent);
+  background:var(--bml-panel);
   border:1px solid var(--bml-line);border-radius:10px;
-  box-shadow:0 4px 16px rgba(15,23,42,.06);backdrop-filter:blur(6px);
+  box-shadow:0 4px 16px rgba(15,23,42,.06);
 }
 .bml-legend b{font-weight:600;color:var(--bml-ink);font-size:10.5px;margin-right:2px}
 .bml-legend .bml-item{display:inline-flex;align-items:center;gap:5px}
@@ -142,6 +147,43 @@
 .bml-edge-item .bml-arrow{font-family:ui-monospace,monospace;color:var(--bml-ink-3);font-size:11px;padding-top:1px}
 .bml-edge-item .bml-t{font-size:12px;color:var(--bml-ink)}
 .bml-edge-item .bml-l{font-size:11px;color:var(--bml-ink-3);font-family:ui-monospace,monospace;word-break:break-all}
+.bml-layers{
+  position:absolute;top:12px;left:12px;width:272px;max-height:calc(100% - 120px);
+  display:none;flex-direction:column;background:var(--bml-panel);
+  border:1px solid var(--bml-line);border-radius:12px;
+  box-shadow:0 12px 32px rgba(15,23,42,.12);z-index:4;overflow:hidden;
+}
+.bml-layers.bml-open{display:flex}
+.bml-layers-head{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--bml-line)}
+.bml-layers-head b{font-size:12px;font-weight:650;color:var(--bml-ink)}
+.bml-layers-meta{font-size:10.5px;color:var(--bml-ink-3)}
+.bml-layers-head .bml-close{margin-left:auto}
+.bml-layers-body{padding:4px 6px 8px;overflow:auto;flex:1;font-size:12px}
+.bml-layer-group{border-bottom:1px dashed var(--bml-line);padding:3px 0}
+.bml-layer-group:last-child{border-bottom:none}
+.bml-layer-row{display:flex;align-items:center;gap:7px;padding:4px 6px;border-radius:6px;color:var(--bml-ink-2)}
+.bml-layer-row:hover{background:var(--bml-bg)}
+.bml-layer-row.bml-muted{opacity:.45}
+.bml-layer-check{display:flex;align-items:center;gap:7px;flex:1;min-width:0;cursor:pointer}
+.bml-layer-row input{accent-color:var(--bml-accent);margin:0}
+.bml-layer-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--bml-ink)}
+.bml-layer-count{font:500 10px/1 ui-monospace,monospace;color:var(--bml-ink-3)}
+.bml-layer-node{padding-left:22px}
+.bml-layer-node .bml-layer-name{font:400 11.5px/1.3 ui-monospace,monospace;color:var(--bml-ink-2)}
+.bml-layer-fold{
+  border:1px solid var(--bml-line);background:transparent;color:var(--bml-ink-3);
+  font:500 10.5px/1 inherit;padding:3px 7px;border-radius:5px;cursor:pointer;
+}
+.bml-layer-fold:hover{color:var(--bml-ink);border-color:var(--bml-ink-3)}
+.bml-layers-foot{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:8px 12px;border-top:1px solid var(--bml-line);font-size:10.5px;color:var(--bml-ink-3);
+}
+.bml-layers-foot button{
+  border:1px solid var(--bml-line);background:transparent;color:var(--bml-ink-2);
+  font:500 10.5px/1 inherit;padding:4px 8px;border-radius:5px;cursor:pointer;
+}
+.bml-layers-foot button:hover{border-color:var(--bml-ink-3);color:var(--bml-ink)}
 .bml-error{
   position:absolute;left:14px;top:14px;max-width:min(560px,70%);padding:10px 12px;
   background:#fef2f2;border:1px solid #fecaca;border-radius:10px;color:#991b1b;
@@ -158,6 +200,7 @@
     <span class="name">订单平台 · 架构示例</span>
     <span class="badge">.blockml</span>
     <span class="grow"></span>
+    <button data-act="layers" title="显示 / 隐藏分组与节点">图层</button>
     <select id="blockml-layout" title="重新排列（会覆盖手工坐标）">
       <option value="">手工布局</option>
       <option value="layered">从左到右</option>
@@ -1442,6 +1485,40 @@ var BlockML = (() => {
     return set;
   }
 
+  // packages/core/src/visibility.ts
+  function resolveVisibility(options) {
+    return {
+      hiddenNodes: new Set(options?.hiddenNodes ?? []),
+      hiddenGroups: new Set(options?.hiddenGroups ?? []),
+      collapsedGroups: new Set(options?.collapsedGroups ?? [])
+    };
+  }
+  function isNodeVisible(node, visibility) {
+    if (visibility.hiddenNodes.has(node.id)) return false;
+    if (!node.group) return true;
+    return !visibility.hiddenGroups.has(node.group) && !visibility.collapsedGroups.has(node.group);
+  }
+  function visibleNodes(document2, visibility) {
+    return document2.nodes.filter((node) => isNodeVisible(node, visibility));
+  }
+  function visibleEdges(document2, visibility) {
+    const ids = new Set(visibleNodes(document2, visibility).map((node) => node.id));
+    return document2.edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to));
+  }
+  function visibleGroups(document2, visibility) {
+    return document2.groups.filter((group) => !visibility.hiddenGroups.has(group.id));
+  }
+  function groupEdgeCount(document2, groupId) {
+    const members = new Set(
+      document2.nodes.filter((node) => node.group === groupId).map((node) => node.id)
+    );
+    let count = 0;
+    for (const edge of document2.edges) {
+      if (members.has(edge.from) || members.has(edge.to)) count++;
+    }
+    return count;
+  }
+
   // packages/viewer/src/styles.ts
   var VIEWER_CSS = `
 .bml-root{
@@ -1478,7 +1555,12 @@ var BlockML = (() => {
 .bml-root.bml-readonly .bml-node{cursor:default}
 .bml-grid-dot{fill:var(--bml-grid)}
 .bml-group-box{fill-opacity:.06;stroke-opacity:.3;stroke-width:1.2}
+.bml-group-box.bml-collapsed{fill-opacity:.1;stroke-dasharray:5 4}
 .bml-group-label{font:600 10.5px/1 inherit;letter-spacing:.06em;text-transform:uppercase}
+.bml-group-toggle{cursor:pointer}
+.bml-group-toggle circle{stroke-width:1;transition:stroke-opacity .12s ease,fill .12s ease}
+.bml-group-toggle:hover circle{stroke-opacity:.9;fill:var(--bml-bg)}
+.bml-toggle-sign{font:600 12px/1 inherit;pointer-events:none}
 .bml-node{cursor:grab}
 .bml-node.bml-dragging{cursor:grabbing}
 .bml-node-box{fill:var(--bml-panel);stroke:#dbe2ea;stroke-width:1.2;filter:url(#bml-node-shadow)}
@@ -1508,9 +1590,9 @@ var BlockML = (() => {
 .bml-legend{
   position:absolute;left:14px;bottom:14px;display:flex;flex-wrap:wrap;gap:6px 12px;
   max-width:min(560px,60%);padding:9px 11px;font-size:11px;color:var(--bml-ink-2);
-  background:color-mix(in srgb,var(--bml-panel) 92%,transparent);
+  background:var(--bml-panel);
   border:1px solid var(--bml-line);border-radius:10px;
-  box-shadow:0 4px 16px rgba(15,23,42,.06);backdrop-filter:blur(6px);
+  box-shadow:0 4px 16px rgba(15,23,42,.06);
 }
 .bml-legend b{font-weight:600;color:var(--bml-ink);font-size:10.5px;margin-right:2px}
 .bml-legend .bml-item{display:inline-flex;align-items:center;gap:5px}
@@ -1547,6 +1629,43 @@ var BlockML = (() => {
 .bml-edge-item .bml-arrow{font-family:ui-monospace,monospace;color:var(--bml-ink-3);font-size:11px;padding-top:1px}
 .bml-edge-item .bml-t{font-size:12px;color:var(--bml-ink)}
 .bml-edge-item .bml-l{font-size:11px;color:var(--bml-ink-3);font-family:ui-monospace,monospace;word-break:break-all}
+.bml-layers{
+  position:absolute;top:12px;left:12px;width:272px;max-height:calc(100% - 120px);
+  display:none;flex-direction:column;background:var(--bml-panel);
+  border:1px solid var(--bml-line);border-radius:12px;
+  box-shadow:0 12px 32px rgba(15,23,42,.12);z-index:4;overflow:hidden;
+}
+.bml-layers.bml-open{display:flex}
+.bml-layers-head{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--bml-line)}
+.bml-layers-head b{font-size:12px;font-weight:650;color:var(--bml-ink)}
+.bml-layers-meta{font-size:10.5px;color:var(--bml-ink-3)}
+.bml-layers-head .bml-close{margin-left:auto}
+.bml-layers-body{padding:4px 6px 8px;overflow:auto;flex:1;font-size:12px}
+.bml-layer-group{border-bottom:1px dashed var(--bml-line);padding:3px 0}
+.bml-layer-group:last-child{border-bottom:none}
+.bml-layer-row{display:flex;align-items:center;gap:7px;padding:4px 6px;border-radius:6px;color:var(--bml-ink-2)}
+.bml-layer-row:hover{background:var(--bml-bg)}
+.bml-layer-row.bml-muted{opacity:.45}
+.bml-layer-check{display:flex;align-items:center;gap:7px;flex:1;min-width:0;cursor:pointer}
+.bml-layer-row input{accent-color:var(--bml-accent);margin:0}
+.bml-layer-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--bml-ink)}
+.bml-layer-count{font:500 10px/1 ui-monospace,monospace;color:var(--bml-ink-3)}
+.bml-layer-node{padding-left:22px}
+.bml-layer-node .bml-layer-name{font:400 11.5px/1.3 ui-monospace,monospace;color:var(--bml-ink-2)}
+.bml-layer-fold{
+  border:1px solid var(--bml-line);background:transparent;color:var(--bml-ink-3);
+  font:500 10.5px/1 inherit;padding:3px 7px;border-radius:5px;cursor:pointer;
+}
+.bml-layer-fold:hover{color:var(--bml-ink);border-color:var(--bml-ink-3)}
+.bml-layers-foot{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:8px 12px;border-top:1px solid var(--bml-line);font-size:10.5px;color:var(--bml-ink-3);
+}
+.bml-layers-foot button{
+  border:1px solid var(--bml-line);background:transparent;color:var(--bml-ink-2);
+  font:500 10.5px/1 inherit;padding:4px 8px;border-radius:5px;cursor:pointer;
+}
+.bml-layers-foot button:hover{border-color:var(--bml-ink-3);color:var(--bml-ink)}
 .bml-error{
   position:absolute;left:14px;top:14px;max-width:min(560px,70%);padding:10px 12px;
   background:#fef2f2;border:1px solid #fecaca;border-radius:10px;color:#991b1b;
@@ -1616,19 +1735,27 @@ var BlockML = (() => {
     edgeLayer;
     nodeLayer;
     labelLayer;
+    uiLayer;
     overlayLayer;
     defs;
     legend;
     inspector;
+    layersPanel;
     errorBox;
     options;
     source;
     doc = null;
+    /** `doc` filtered by the current visibility; nodes are the same objects. */
+    viewDoc = null;
     diagnostics = [];
     view = { x: 40, y: 20, k: 1 };
     selectedNode = null;
     selectedEdge = null;
     hoveredNode = null;
+    hiddenNodes = /* @__PURE__ */ new Set();
+    hiddenGroups = /* @__PURE__ */ new Set();
+    collapsedGroups = /* @__PURE__ */ new Set();
+    layersOpen = false;
     nodeEls = /* @__PURE__ */ new Map();
     edgeEls = /* @__PURE__ */ new Map();
     groupEls = /* @__PURE__ */ new Map();
@@ -1652,12 +1779,14 @@ var BlockML = (() => {
       this.edgeLayer = el("g", { class: "bml-edges" });
       this.nodeLayer = el("g", { class: "bml-nodes" });
       this.labelLayer = el("g", { class: "bml-labels" });
+      this.uiLayer = el("g", { class: "bml-ui" });
       this.overlayLayer = el("g", { class: "bml-overlay" });
       this.svg.appendChild(this.defs);
       this.viewport.appendChild(this.groupLayer);
       this.viewport.appendChild(this.edgeLayer);
       this.viewport.appendChild(this.nodeLayer);
       this.viewport.appendChild(this.labelLayer);
+      this.viewport.appendChild(this.uiLayer);
       this.viewport.appendChild(this.overlayLayer);
       this.svg.appendChild(this.viewport);
       this.root.appendChild(this.svg);
@@ -1671,6 +1800,10 @@ var BlockML = (() => {
       this.inspector = document.createElement("aside");
       this.inspector.className = "bml-inspector";
       this.root.appendChild(this.inspector);
+      this.layersPanel = document.createElement("section");
+      this.layersPanel.className = "bml-layers";
+      this.root.appendChild(this.layersPanel);
+      this.bindLayersPanel();
       this.buildDefs();
       this.bindCanvas();
     }
@@ -1690,6 +1823,54 @@ var BlockML = (() => {
         if (!node.at) node.at = layout.get(node.id) ?? { x: 0, y: 0 };
       }
       this.doc = doc;
+      this.rebuildView();
+    }
+    /* ---------------------------------------------------------- visibility */
+    visibility() {
+      return resolveVisibility({
+        hiddenNodes: this.hiddenNodes,
+        hiddenGroups: this.hiddenGroups,
+        collapsedGroups: this.collapsedGroups
+      });
+    }
+    rebuildView() {
+      if (!this.doc) {
+        this.viewDoc = null;
+        return;
+      }
+      const visibility = this.visibility();
+      this.viewDoc = {
+        ...this.doc,
+        nodes: visibleNodes(this.doc, visibility),
+        edges: visibleEdges(this.doc, visibility),
+        groups: visibleGroups(this.doc, visibility)
+      };
+    }
+    /** Full bounding box of a group, including members that are hidden or folded away. */
+    fullGroupBox(group) {
+      if (!this.doc) return null;
+      return groupBoundingBox(this.doc.nodes.filter((node) => node.group === group.id));
+    }
+    /** A collapsed group shrinks to a compact chip anchored at its frame origin. */
+    collapseChip(full) {
+      return { x: full.x, y: full.y, w: Math.max(180, Math.min(full.w, 300)), h: 40 };
+    }
+    viewBounds() {
+      const base = contentBounds(this.viewDoc ?? this.doc);
+      let { x, y } = base;
+      let x1 = base.x + base.w;
+      let y1 = base.y + base.h;
+      for (const group of this.doc?.groups ?? []) {
+        if (!this.collapsedGroups.has(group.id) || this.hiddenGroups.has(group.id)) continue;
+        const full = this.fullGroupBox(group);
+        if (!full) continue;
+        const chip = this.collapseChip(full);
+        x = Math.min(x, chip.x);
+        y = Math.min(y, chip.y);
+        x1 = Math.max(x1, chip.x + chip.w);
+        y1 = Math.max(y1, chip.y + chip.h);
+      }
+      return { x, y, w: x1 - x, h: y1 - y };
     }
     showErrors(diagnostics) {
       const first = diagnostics.find((d) => d.severity === "error");
@@ -1760,7 +1941,7 @@ var BlockML = (() => {
       }
     }
     render() {
-      if (!this.doc) return;
+      if (!this.doc || !this.viewDoc) return;
       this.nodeEls.clear();
       this.edgeEls.clear();
       this.groupEls.clear();
@@ -1769,6 +1950,7 @@ var BlockML = (() => {
       this.edgeLayer.innerHTML = "";
       this.nodeLayer.innerHTML = "";
       this.labelLayer.innerHTML = "";
+      this.uiLayer.innerHTML = "";
       this.overlayLayer.innerHTML = "";
       const grid = el("rect", {
         x: -8e3,
@@ -1783,14 +1965,20 @@ var BlockML = (() => {
       this.renderNodes();
       this.renderLegend();
       this.applySelection();
+      this.renderLayersPanel();
     }
     renderGroups() {
-      if (!this.doc) return;
-      for (const group of this.doc.groups) {
-        const members = this.doc.nodes.filter((n) => n.group === group.id);
-        const box = groupBoundingBox(members);
-        if (!box) continue;
+      if (!this.doc || !this.viewDoc) return;
+      for (const group of this.viewDoc.groups) {
+        const members = this.doc.nodes.filter((node) => node.group === group.id);
+        const full = groupBoundingBox(members);
+        if (!full) continue;
+        const collapsed = this.collapsedGroups.has(group.id);
+        const shown = members.filter((node) => isNodeVisible(node, this.visibility()));
+        if (!collapsed && !shown.length) continue;
+        const box = collapsed ? this.collapseChip(full) : groupBoundingBox(shown);
         const color = group.color ?? "#64748b";
+        const label = group.label ?? group.title;
         const rect = el("rect", {
           x: box.x,
           y: box.y,
@@ -1799,42 +1987,87 @@ var BlockML = (() => {
           rx: 16,
           fill: color,
           stroke: color,
-          class: "bml-group-box"
+          class: collapsed ? "bml-group-box bml-collapsed" : "bml-group-box"
         });
         this.groupLayer.appendChild(rect);
         const text = el("text", {
           x: box.x + 16,
-          y: box.y + 21,
+          y: box.y + (collapsed ? 24 : 21),
           class: "bml-group-label",
           fill: color
         });
-        text.textContent = group.label ?? group.title;
+        text.textContent = collapsed ? truncate(
+          `${label} \xB7 ${members.length} \u8282\u70B9 / ${groupEdgeCount(this.doc, group.id)} \u8FDE\u7EBF`,
+          `600 10.5px ${getComputedStyle(this.root).fontFamily}`,
+          box.w - 42
+        ) : label;
         this.groupLayer.appendChild(text);
-        this.groupEls.set(group.id, { rect, text });
+        const toggle = el("g", {
+          class: "bml-group-toggle",
+          "data-id": group.id,
+          transform: `translate(${box.x + box.w - 16} ${box.y + (collapsed ? 20 : 19)})`
+        });
+        el("title", {}, toggle).textContent = collapsed ? `\u5C55\u5F00 ${label}` : `\u6298\u53E0 ${label}`;
+        el("circle", {
+          r: 9,
+          fill: "var(--bml-panel)",
+          stroke: color,
+          "stroke-opacity": 0.35
+        }, toggle);
+        const sign = el("text", {
+          y: 0.5,
+          "text-anchor": "middle",
+          "dominant-baseline": "central",
+          fill: color,
+          class: "bml-toggle-sign"
+        });
+        sign.textContent = collapsed ? "+" : "\u2212";
+        toggle.appendChild(sign);
+        toggle.addEventListener("pointerdown", (event) => {
+          if (event.button !== 0) return;
+          event.stopPropagation();
+        });
+        toggle.addEventListener("click", (event) => {
+          event.stopPropagation();
+          this.toggleGroupCollapsed(group.id);
+        });
+        this.uiLayer.appendChild(toggle);
+        this.groupEls.set(group.id, { rect, text, toggle, sign });
       }
     }
     edgeGeometryOf(edge) {
-      if (!this.doc) return null;
-      return edgeGeometry(edge, { byId: new Map(this.doc.nodes.map((n) => [n.id, n])), pairs: indexPairs(this.doc) });
+      if (!this.viewDoc) return null;
+      return edgeGeometry(edge, {
+        byId: new Map(this.viewDoc.nodes.map((n) => [n.id, n])),
+        pairs: indexPairs(this.viewDoc)
+      });
     }
     renderEdges() {
-      if (!this.doc) return;
+      if (!this.doc || !this.viewDoc) return;
       const family = getComputedStyle(this.root).fontFamily;
-      const obstacles = this.doc.nodes.map((n) => ({
+      const obstacles = this.viewDoc.nodes.map((n) => ({
         x: n.at.x - 2,
         y: n.at.y - 2,
         w: DEFAULT_BOX.width + 4,
         h: DEFAULT_BOX.height + 4
       }));
-      for (const group of this.doc.groups) {
+      for (const group of this.viewDoc.groups) {
         const members = this.doc.nodes.filter((n) => n.group === group.id);
-        const box = groupBoundingBox(members);
+        const full = groupBoundingBox(members);
+        if (!full) continue;
+        if (this.collapsedGroups.has(group.id)) {
+          const chip = this.collapseChip(full);
+          obstacles.push({ x: chip.x, y: chip.y, w: chip.w, h: chip.h });
+          continue;
+        }
+        const shown = members.filter((node) => isNodeVisible(node, this.visibility()));
+        const box = groupBoundingBox(shown);
         if (!box) continue;
         const label = group.label ?? group.title;
         const width = textWidth(label, `600 10.5px ${family}`);
         obstacles.push({ x: box.x + 8, y: box.y + 5, w: width + 26, h: 24 });
       }
-      for (const edge of this.doc.edges) {
+      for (const edge of this.viewDoc.edges) {
         const geo = this.edgeGeometryOf(edge);
         if (!geo) continue;
         const style = edgeKindStyle(edge.kind);
@@ -1887,9 +2120,9 @@ var BlockML = (() => {
       }
     }
     renderNodes() {
-      if (!this.doc) return;
+      if (!this.doc || !this.viewDoc) return;
       const family = getComputedStyle(this.root).fontFamily;
-      for (const node of this.doc.nodes) {
+      for (const node of this.viewDoc.nodes) {
         const at = node.at;
         const style = nodeKindStyle(node.kind);
         const group = el("g", {
@@ -1928,12 +2161,12 @@ var BlockML = (() => {
       }
     }
     renderLegend() {
-      if (this.options.showLegend === false || !this.doc) {
+      if (this.options.showLegend === false || !this.viewDoc) {
         this.legend.style.display = "none";
         return;
       }
       const seen = /* @__PURE__ */ new Set();
-      for (const node of this.doc.nodes) seen.add(node.kind);
+      for (const node of this.viewDoc.nodes) seen.add(node.kind);
       const items = [...seen].map((kind) => {
         const style = nodeKindStyle(kind);
         return `<span class="bml-item"><span class="bml-swatch" style="background:${style.color}"></span>${escape(style.label)}</span>`;
@@ -1955,18 +2188,20 @@ var BlockML = (() => {
       };
     }
     fit() {
-      if (!this.doc) return;
+      if (!this.doc || !this.viewDoc) return;
       const rect = this.svg.getBoundingClientRect();
       if (!rect.width || !rect.height) return;
-      const bounds = contentBounds(this.doc);
+      const bounds = this.viewBounds();
       const pad = 56;
+      const inset = this.layersOpen ? 296 : 0;
+      const width = Math.max(1, rect.width - inset);
       const k = clamp(Math.min(
-        (rect.width - pad * 2) / Math.max(bounds.w, 1),
+        (width - pad * 2) / Math.max(bounds.w, 1),
         (rect.height - pad * 2) / Math.max(bounds.h, 1)
       ), 0.15, 1.2);
       this.view = {
         k,
-        x: (rect.width - bounds.w * k) / 2 - bounds.x * k,
+        x: inset + (width - bounds.w * k) / 2 - bounds.x * k,
         y: (rect.height - bounds.h * k) / 2 - bounds.y * k
       };
       this.applyView();
@@ -2019,6 +2254,7 @@ var BlockML = (() => {
     }
     onKeyDown = (event) => {
       if (event.key === "Escape") {
+        if (this.layersOpen) this.toggleLayers(false);
         this.selectNode(null);
         this.selectEdge(null);
       }
@@ -2035,7 +2271,7 @@ var BlockML = (() => {
       const origin = { x: node.at.x, y: node.at.y, x0: start.x, y0: start.y };
       let moved = false;
       group.classList.add("bml-dragging");
-      const affected = this.doc?.edges.filter((e) => e.from === node.id || e.to === node.id) ?? [];
+      const affected = this.viewDoc?.edges.filter((e) => e.from === node.id || e.to === node.id) ?? [];
       const onMove = (e) => {
         const p = this.toWorld(e.clientX, e.clientY);
         const x = Math.round(origin.x + (p.x - origin.x0));
@@ -2112,19 +2348,27 @@ var BlockML = (() => {
       }
     }
     refreshGroups() {
-      if (!this.doc) return;
-      for (const group of this.doc.groups) {
+      if (!this.doc || !this.viewDoc) return;
+      const visibility = this.visibility();
+      for (const group of this.viewDoc.groups) {
         const els = this.groupEls.get(group.id);
         if (!els) continue;
         const members = this.doc.nodes.filter((n) => n.group === group.id);
-        const box = groupBoundingBox(members);
+        const full = groupBoundingBox(members);
+        if (!full) continue;
+        const collapsed = this.collapsedGroups.has(group.id);
+        const box = collapsed ? this.collapseChip(full) : groupBoundingBox(members.filter((node) => isNodeVisible(node, visibility)));
         if (!box) continue;
         els.rect.setAttribute("x", String(box.x));
         els.rect.setAttribute("y", String(box.y));
         els.rect.setAttribute("width", String(box.w));
         els.rect.setAttribute("height", String(box.h));
         els.text.setAttribute("x", String(box.x + 16));
-        els.text.setAttribute("y", String(box.y + 21));
+        els.text.setAttribute("y", String(box.y + (collapsed ? 24 : 21)));
+        els.toggle.setAttribute(
+          "transform",
+          `translate(${box.x + box.w - 16} ${box.y + (collapsed ? 20 : 19)})`
+        );
       }
     }
     /* ------------------------------------------------------------ mutation */
@@ -2171,8 +2415,8 @@ var BlockML = (() => {
     /** Dim everything that is not on the hovered/selected node. */
     applyFocus() {
       const focus = this.selectedNode ?? this.hoveredNode;
-      const edges = this.doc ? relatedEdges(this.doc, focus) : /* @__PURE__ */ new Set();
-      const nodes = this.doc ? relatedNodes(this.doc, focus) : /* @__PURE__ */ new Set();
+      const edges = this.viewDoc ? relatedEdges(this.viewDoc, focus) : /* @__PURE__ */ new Set();
+      const nodes = this.viewDoc ? relatedNodes(this.viewDoc, focus) : /* @__PURE__ */ new Set();
       this.root.classList.toggle("bml-focusing", Boolean(focus));
       for (const [id, els] of this.edgeEls) {
         const related = edges.has(id);
@@ -2287,6 +2531,156 @@ var BlockML = (() => {
       this.commit({ nodes: positions });
       this.fit();
     }
+    /* ----------------------------------------------------------- visibility */
+    toggleLayers(open = !this.layersOpen) {
+      this.layersOpen = open;
+      this.layersPanel.classList.toggle("bml-open", open);
+      if (open) this.renderLayersPanel();
+    }
+    toggleGroupCollapsed(id) {
+      if (!this.doc?.groups.some((group) => group.id === id)) return;
+      if (this.collapsedGroups.has(id)) this.collapsedGroups.delete(id);
+      else this.collapsedGroups.add(id);
+      this.afterVisibilityChange();
+    }
+    setHiddenNodes(ids) {
+      this.hiddenNodes = new Set(ids);
+      this.afterVisibilityChange();
+    }
+    setHiddenGroups(ids) {
+      this.hiddenGroups = new Set(ids);
+      this.afterVisibilityChange();
+    }
+    setCollapsedGroups(ids) {
+      this.collapsedGroups = new Set(ids);
+      this.afterVisibilityChange();
+    }
+    showAll() {
+      if (!this.hiddenNodes.size && !this.hiddenGroups.size && !this.collapsedGroups.size) return;
+      this.hiddenNodes.clear();
+      this.hiddenGroups.clear();
+      this.collapsedGroups.clear();
+      this.afterVisibilityChange();
+    }
+    getVisibility() {
+      return {
+        hiddenNodes: [...this.hiddenNodes],
+        hiddenGroups: [...this.hiddenGroups],
+        collapsedGroups: [...this.collapsedGroups]
+      };
+    }
+    afterVisibilityChange() {
+      this.rebuildView();
+      this.syncSelectionToView();
+      this.render();
+      this.options.onVisibilityChange?.(this.getVisibility());
+    }
+    /** Drop selections that just became invisible; they must not linger off-canvas. */
+    syncSelectionToView() {
+      const nodeIds = new Set(this.viewDoc?.nodes.map((node) => node.id) ?? []);
+      const edgeIds = new Set(this.viewDoc?.edges.map((edge) => edge.id) ?? []);
+      if (this.hoveredNode && !nodeIds.has(this.hoveredNode)) this.hoveredNode = null;
+      if (this.selectedNode && !nodeIds.has(this.selectedNode)) {
+        this.selectedNode = null;
+        this.closeInspector();
+      }
+      if (this.selectedEdge && !edgeIds.has(this.selectedEdge)) {
+        this.selectedEdge = null;
+        this.closeInspector();
+      }
+    }
+    bindLayersPanel() {
+      this.layersPanel.addEventListener("change", (event) => {
+        const input = event.target;
+        if (input.tagName !== "INPUT") return;
+        const groupId = input.dataset.group;
+        if (groupId !== void 0) {
+          if (input.checked) this.hiddenGroups.delete(groupId);
+          else this.hiddenGroups.add(groupId);
+          this.afterVisibilityChange();
+          return;
+        }
+        const nodeId = input.dataset.node;
+        if (nodeId === void 0) return;
+        if (input.checked) this.hiddenNodes.delete(nodeId);
+        else this.hiddenNodes.add(nodeId);
+        this.afterVisibilityChange();
+      });
+      this.layersPanel.addEventListener("click", (event) => {
+        const button = event.target.closest("button");
+        if (!button) return;
+        const fold = button.dataset.fold;
+        if (fold !== void 0) {
+          this.toggleGroupCollapsed(fold);
+          return;
+        }
+        if (button.dataset.showAll !== void 0) {
+          this.showAll();
+          return;
+        }
+        if (button.dataset.layersClose !== void 0) this.toggleLayers(false);
+      });
+    }
+    renderLayersPanel() {
+      if (!this.layersOpen) return;
+      if (!this.doc || !this.viewDoc) {
+        this.layersPanel.innerHTML = "";
+        return;
+      }
+      const visibility = this.visibility();
+      const known = new Set(this.doc.groups.map((group) => group.id));
+      const blocks = [];
+      for (const group of this.doc.groups) {
+        const members = this.doc.nodes.filter((node) => node.group === group.id);
+        const collapsed = this.collapsedGroups.has(group.id);
+        const hidden = this.hiddenGroups.has(group.id);
+        const label = escape(group.label ?? group.title);
+        const rows = members.map((node) => this.layerNodeRow(node, visibility)).join("");
+        blocks.push(`
+        <div class="bml-layer-group">
+          <div class="bml-layer-row${hidden ? " bml-muted" : ""}">
+            <label class="bml-layer-check">
+              <input type="checkbox" data-group="${escape(group.id)}"${hidden ? "" : " checked"}>
+              <span class="bml-layer-name">${label}</span>
+            </label>
+            <span class="bml-layer-count">${members.length}</span>
+            <button class="bml-layer-fold" data-fold="${escape(group.id)}" title="\u6298\u53E0\u7EC4\u6210\u5458\uFF0C\u53EA\u7559\u7EC4\u6846">${collapsed ? "\u5C55\u5F00" : "\u6298\u53E0"}</button>
+          </div>
+          ${rows}
+        </div>`);
+      }
+      const loose = this.doc.nodes.filter((node) => !node.group || !known.has(node.group));
+      if (loose.length) {
+        blocks.push(`
+        <div class="bml-layer-group">
+          <div class="bml-layer-row">
+            <span class="bml-layer-name">\u672A\u5206\u7EC4</span>
+            <span class="bml-layer-count">${loose.length}</span>
+          </div>
+          ${loose.map((node) => this.layerNodeRow(node, visibility)).join("")}
+        </div>`);
+      }
+      this.layersPanel.innerHTML = `
+      <div class="bml-layers-head">
+        <b>\u56FE\u5C42</b>
+        <span class="bml-layers-meta">\u4EC5\u5F71\u54CD\u89C6\u56FE</span>
+        <button class="bml-close" data-layers-close title="\u5173\u95ED">\xD7</button>
+      </div>
+      <div class="bml-layers-body">${blocks.join("")}</div>
+      <div class="bml-layers-foot">
+        <span>\u4E0D\u5199\u56DE\u6E90\u7801</span>
+        <button data-show-all>\u5168\u90E8\u663E\u793A</button>
+      </div>`;
+    }
+    layerNodeRow(node, visibility) {
+      const hidden = this.hiddenNodes.has(node.id);
+      const muted = !hidden && !isNodeVisible(node, visibility);
+      return `
+      <label class="bml-layer-row bml-layer-node${muted ? " bml-muted" : ""}">
+        <input type="checkbox" data-node="${escape(node.id)}"${hidden ? "" : " checked"}>
+        <span class="bml-layer-name">${escape(nodeDisplayName(node))}</span>
+      </label>`;
+    }
     update(source) {
       this.source = source;
       this.parse(source);
@@ -2307,9 +2701,10 @@ var BlockML = (() => {
       const clone = this.svg.cloneNode(true);
       clone.setAttribute("xmlns", SVGNS);
       clone.querySelector(".bml-overlay")?.remove();
+      clone.querySelector(".bml-ui")?.remove();
       clone.querySelector(".bml-groups > rect[fill^='url']")?.remove();
-      if (this.doc) {
-        const bounds = contentBounds(this.doc);
+      if (this.doc && this.viewDoc) {
+        const bounds = this.viewBounds();
         const pad = 40;
         clone.setAttribute("viewBox", `${bounds.x - pad} ${bounds.y - pad} ${bounds.w + pad * 2} ${bounds.h + pad * 2}`);
         clone.setAttribute("width", String(Math.ceil(bounds.w + pad * 2)));
@@ -2431,7 +2826,7 @@ var BlockML = (() => {
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%2394a3b8' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
     background-repeat:no-repeat;background-position:right 7px center;
   }
-  #blockml-app{position:relative;padding-top:44px}
+  #blockml-app{position:relative;box-sizing:border-box;padding-top:44px}
   #blockml-mount{position:absolute;inset:44px 0 0 0}
 ${options.viewerCss}
 </style>
@@ -2442,6 +2837,7 @@ ${options.viewerCss}
     <span class="name">${escapeHtml(title)}</span>
     <span class="badge">.blockml</span>
     <span class="grow"></span>
+    <button data-act="layers" title="\u663E\u793A / \u9690\u85CF\u5206\u7EC4\u4E0E\u8282\u70B9">\u56FE\u5C42</button>
     <select id="blockml-layout" title="\u91CD\u65B0\u6392\u5217\uFF08\u4F1A\u8986\u76D6\u624B\u5DE5\u5750\u6807\uFF09">
       <option value="">\u624B\u5DE5\u5E03\u5C40</option>
       <option value="layered">\u4ECE\u5DE6\u5230\u53F3</option>
@@ -2471,6 +2867,7 @@ ${options.viewerCss}
   window.__blockmlGetSource = function(){ return handle.getSource(); };
   var actions = {
     "fit": function(){ handle.fit(); },
+    "layers": function(){ handle.toggleLayers(); },
     "zoom-in": function(){ handle.zoomTo(handle.getView().k * 1.25); },
     "zoom-out": function(){ handle.zoomTo(handle.getView().k / 1.25); },
     "download": function(){
@@ -2515,6 +2912,7 @@ ${options.viewerCss}
   window.__blockmlGetSource = function(){ return handle.getSource(); };
   var actions = {
     "fit": function(){ handle.fit(); },
+    "layers": function(){ handle.toggleLayers(); },
     "zoom-in": function(){ handle.zoomTo(handle.getView().k * 1.25); },
     "zoom-out": function(){ handle.zoomTo(handle.getView().k / 1.25); },
     "download": function(){

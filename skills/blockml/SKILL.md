@@ -20,7 +20,7 @@ BlockML 是给架构图用的 diagram-as-code：一块文本同时描述**语义
 3. **每条断言挂 `src`**：节点/边只要说了「谁连谁、跑在哪、几个连接池」这类事实，就要能被 `文件:行` 或文档章节指到。没有出处的断言不要写进图。
 4. **自检**：`node <blockml-repo>/packages/cli/bin.mjs validate <file>`，error 必须清零，warning 逐条确认。
 5. **排版**（可选）：`node <blockml-repo>/packages/cli/bin.mjs layout <file> --algo layered --write`，让机器先摆一遍，再人工微调
-6. **交付**：`node <blockml-repo>/packages/cli/bin.mjs render <file> -o <out.html>`，把 HTML 路径给用户。用户拖动后的坐标会写回 `.blockml`，可再 `下载源码`。
+6. **交付**：`node <blockml-repo>/packages/cli/bin.mjs render <file> -o <out.html>`，把 HTML 路径给用户。用户拖动后的坐标会写回 `.blockml`，可再 `下载源码`；阅读器里的分组折叠与「图层」隐藏只影响视图，不写回文件。
 
 > 排列算法：`layered`（按组分层）、`pipeline`（按组声明顺序）、`snowflake`（中心放射）、`compact`（网格）。重排会覆盖手工坐标，只保留连线曲率。
 > 仓库在本地时用上面的完整路径；把 `@blockml/cli` 装到 PATH 之后，可以直接用 `blockml validate` / `blockml render`。

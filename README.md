@@ -42,7 +42,7 @@ node packages/cli/bin.mjs validate examples/order-platform.blockml
 node packages/cli/bin.mjs render examples/order-platform.blockml -o out/order-platform.html
 ```
 
-产物是一个自包含 HTML：内联 CSS 和 JS、零外部依赖、内网双击即看。画布上可以直接拖节点、拖连线控制点；悬停或选中节点会高亮与它相连的边；顶部下拉可以在四种排列算法之间切换；改完点「下载源码」拿回带坐标的 `.blockml`。
+产物是一个自包含 HTML：内联 CSS 和 JS、零外部依赖、内网双击即看。画布上可以直接拖节点、拖连线控制点；悬停或选中节点会高亮与它相连的边；顶部下拉可以在四种排列算法之间切换；每个分组框右上角可以折叠成带计数的胶囊，「图层」面板能逐个隐藏分组或节点（只影响视图，不改源码）；改完点「下载源码」拿回带坐标的 `.blockml`。
 
 仓库里有一份渲染好的示例：[`examples/order-platform.html`](examples/order-platform.html)（虚构的电商订单平台，源码同名 `.blockml`）。
 
@@ -96,7 +96,7 @@ skills/
 
 ## 状态
 
-v0.1 已实现：规范、parser、viewer（四种排列 + 悬停高亮）、CLI、agent skill。
+v0.1 已实现：规范、parser、viewer（四种排列 + 悬停高亮 + 分组折叠 / 图层隐藏）、CLI、agent skill。
 
 路线图：
 
@@ -104,6 +104,7 @@ v0.1 已实现：规范、parser、viewer（四种排列 + 悬停高亮）、CLI
 - [ ] 子图嵌套 / 边链 `a -> b -> c`
 - [ ] 桌面阅读器（Tauri）
 - [x] 四种排列算法 + 悬停高亮
+- [x] 分组折叠 + 图层隐藏（仅视图，不写回）
 - [ ] npm 发布与 d.ts
 
 ## License

@@ -28,6 +28,15 @@ export type { LayoutAlgorithm } from "./layout.js";
 export type { LayoutPatch } from "./patch.js";
 export { tokenize } from "./tokenizer.js";
 export type { Token, TokenType } from "./tokenizer.js";
+export {
+  groupEdgeCount,
+  isNodeVisible,
+  resolveVisibility,
+  visibleEdges,
+  visibleGroups,
+  visibleNodes,
+} from "./visibility.js";
+export type { Visibility, VisibilityOptions } from "./visibility.js";
 
 export {
   DEFAULT_EDGE_KIND,

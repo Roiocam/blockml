@@ -33,7 +33,12 @@ export const VIEWER_CSS = `
 .bml-root.bml-readonly .bml-node{cursor:default}
 .bml-grid-dot{fill:var(--bml-grid)}
 .bml-group-box{fill-opacity:.06;stroke-opacity:.3;stroke-width:1.2}
+.bml-group-box.bml-collapsed{fill-opacity:.1;stroke-dasharray:5 4}
 .bml-group-label{font:600 10.5px/1 inherit;letter-spacing:.06em;text-transform:uppercase}
+.bml-group-toggle{cursor:pointer}
+.bml-group-toggle circle{stroke-width:1;transition:stroke-opacity .12s ease,fill .12s ease}
+.bml-group-toggle:hover circle{stroke-opacity:.9;fill:var(--bml-bg)}
+.bml-toggle-sign{font:600 12px/1 inherit;pointer-events:none}
 .bml-node{cursor:grab}
 .bml-node.bml-dragging{cursor:grabbing}
 .bml-node-box{fill:var(--bml-panel);stroke:#dbe2ea;stroke-width:1.2;filter:url(#bml-node-shadow)}
@@ -63,9 +68,9 @@ export const VIEWER_CSS = `
 .bml-legend{
   position:absolute;left:14px;bottom:14px;display:flex;flex-wrap:wrap;gap:6px 12px;
   max-width:min(560px,60%);padding:9px 11px;font-size:11px;color:var(--bml-ink-2);
-  background:color-mix(in srgb,var(--bml-panel) 92%,transparent);
+  background:var(--bml-panel);
   border:1px solid var(--bml-line);border-radius:10px;
-  box-shadow:0 4px 16px rgba(15,23,42,.06);backdrop-filter:blur(6px);
+  box-shadow:0 4px 16px rgba(15,23,42,.06);
 }
 .bml-legend b{font-weight:600;color:var(--bml-ink);font-size:10.5px;margin-right:2px}
 .bml-legend .bml-item{display:inline-flex;align-items:center;gap:5px}
@@ -102,6 +107,43 @@ export const VIEWER_CSS = `
 .bml-edge-item .bml-arrow{font-family:ui-monospace,monospace;color:var(--bml-ink-3);font-size:11px;padding-top:1px}
 .bml-edge-item .bml-t{font-size:12px;color:var(--bml-ink)}
 .bml-edge-item .bml-l{font-size:11px;color:var(--bml-ink-3);font-family:ui-monospace,monospace;word-break:break-all}
+.bml-layers{
+  position:absolute;top:12px;left:12px;width:272px;max-height:calc(100% - 120px);
+  display:none;flex-direction:column;background:var(--bml-panel);
+  border:1px solid var(--bml-line);border-radius:12px;
+  box-shadow:0 12px 32px rgba(15,23,42,.12);z-index:4;overflow:hidden;
+}
+.bml-layers.bml-open{display:flex}
+.bml-layers-head{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--bml-line)}
+.bml-layers-head b{font-size:12px;font-weight:650;color:var(--bml-ink)}
+.bml-layers-meta{font-size:10.5px;color:var(--bml-ink-3)}
+.bml-layers-head .bml-close{margin-left:auto}
+.bml-layers-body{padding:4px 6px 8px;overflow:auto;flex:1;font-size:12px}
+.bml-layer-group{border-bottom:1px dashed var(--bml-line);padding:3px 0}
+.bml-layer-group:last-child{border-bottom:none}
+.bml-layer-row{display:flex;align-items:center;gap:7px;padding:4px 6px;border-radius:6px;color:var(--bml-ink-2)}
+.bml-layer-row:hover{background:var(--bml-bg)}
+.bml-layer-row.bml-muted{opacity:.45}
+.bml-layer-check{display:flex;align-items:center;gap:7px;flex:1;min-width:0;cursor:pointer}
+.bml-layer-row input{accent-color:var(--bml-accent);margin:0}
+.bml-layer-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--bml-ink)}
+.bml-layer-count{font:500 10px/1 ui-monospace,monospace;color:var(--bml-ink-3)}
+.bml-layer-node{padding-left:22px}
+.bml-layer-node .bml-layer-name{font:400 11.5px/1.3 ui-monospace,monospace;color:var(--bml-ink-2)}
+.bml-layer-fold{
+  border:1px solid var(--bml-line);background:transparent;color:var(--bml-ink-3);
+  font:500 10.5px/1 inherit;padding:3px 7px;border-radius:5px;cursor:pointer;
+}
+.bml-layer-fold:hover{color:var(--bml-ink);border-color:var(--bml-ink-3)}
+.bml-layers-foot{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:8px 12px;border-top:1px solid var(--bml-line);font-size:10.5px;color:var(--bml-ink-3);
+}
+.bml-layers-foot button{
+  border:1px solid var(--bml-line);background:transparent;color:var(--bml-ink-2);
+  font:500 10.5px/1 inherit;padding:4px 8px;border-radius:5px;cursor:pointer;
+}
+.bml-layers-foot button:hover{border-color:var(--bml-ink-3);color:var(--bml-ink)}
 .bml-error{
   position:absolute;left:14px;top:14px;max-width:min(560px,70%);padding:10px 12px;
   background:#fef2f2;border:1px solid #fecaca;border-radius:10px;color:#991b1b;

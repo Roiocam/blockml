@@ -10,15 +10,21 @@ import {
   edgeGeometry,
   edgeKindStyle,
   groupBoundingBox,
+  groupEdgeCount,
   hasErrors,
   indexPairs,
+  isNodeVisible,
   layoutDocument,
   nodeDisplayName,
   relatedEdges,
   relatedNodes,
   nodeKindStyle,
   pathOf,
+  resolveVisibility,
   serialize,
+  visibleEdges,
+  visibleGroups,
+  visibleNodes,
   GROUP_HEAD,
   GROUP_PAD,
   type BlockDocument,
@@ -31,6 +37,7 @@ import {
   type ParseResult,
   type Point,
   type Rect,
+  type Visibility,
 } from "@blockml/core";
 import { VIEWER_CSS } from "./styles.js";
 
@@ -44,6 +51,14 @@ export interface ViewerOptions {
   showInspector?: boolean;
   onSourceChange?: (source: string) => void;
   onDiagnostics?: (diagnostics: Diagnostic[]) => void;
+  /** Fired whenever a group is collapsed or a group/node is hidden. */
+  onVisibilityChange?: (state: ViewerVisibility) => void;
+}
+
+export interface ViewerVisibility {
+  hiddenNodes: string[];
+  hiddenGroups: string[];
+  collapsedGroups: string[];
 }
 
 export interface ViewerHandle {
@@ -53,6 +68,13 @@ export interface ViewerHandle {
   fit(): void;
   zoomTo(scale: number): void;
   layout(algorithm: LayoutAlgorithm): void;
+  toggleLayers(open?: boolean): void;
+  toggleGroupCollapsed(id: string): void;
+  setHiddenNodes(ids: string[]): void;
+  setHiddenGroups(ids: string[]): void;
+  setCollapsedGroups(ids: string[]): void;
+  showAll(): void;
+  getVisibility(): ViewerVisibility;
   toSVG(): string;
   getView(): { x: number; y: number; k: number };
   getDocument(): BlockDocument | null;
@@ -133,23 +155,34 @@ class Viewer implements ViewerHandle {
   private edgeLayer: SVGGElement;
   private nodeLayer: SVGGElement;
   private labelLayer: SVGGElement;
+  private uiLayer: SVGGElement;
   private overlayLayer: SVGGElement;
   private defs: SVGDefsElement;
   private legend: HTMLElement;
   private inspector: HTMLElement;
+  private layersPanel: HTMLElement;
   private errorBox: HTMLElement;
 
   private options: ViewerOptions;
   private source: string;
   private doc: BlockDocument | null = null;
+  /** `doc` filtered by the current visibility; nodes are the same objects. */
+  private viewDoc: BlockDocument | null = null;
   private diagnostics: Diagnostic[] = [];
   private view = { x: 40, y: 20, k: 1 };
   private selectedNode: string | null = null;
   private selectedEdge: string | null = null;
   private hoveredNode: string | null = null;
+  private hiddenNodes = new Set<string>();
+  private hiddenGroups = new Set<string>();
+  private collapsedGroups = new Set<string>();
+  private layersOpen = false;
   private nodeEls = new Map<string, SVGGElement>();
   private edgeEls = new Map<string, { line: SVGPathElement; hit: SVGPathElement; labelLayer: SVGGElement }>();
-  private groupEls = new Map<string, { rect: SVGRectElement; text: SVGTextElement }>();
+  private groupEls = new Map<
+    string,
+    { rect: SVGRectElement; text: SVGTextElement; toggle: SVGGElement; sign: SVGTextElement }
+  >();
   private placedLabels: Rect[] = [];
   private fitted = false;
   private destroyed = false;
@@ -173,6 +206,7 @@ class Viewer implements ViewerHandle {
     this.edgeLayer = el("g", { class: "bml-edges" });
     this.nodeLayer = el("g", { class: "bml-nodes" });
     this.labelLayer = el("g", { class: "bml-labels" });
+    this.uiLayer = el("g", { class: "bml-ui" });
     this.overlayLayer = el("g", { class: "bml-overlay" });
 
     this.svg.appendChild(this.defs);
@@ -180,6 +214,7 @@ class Viewer implements ViewerHandle {
     this.viewport.appendChild(this.edgeLayer);
     this.viewport.appendChild(this.nodeLayer);
     this.viewport.appendChild(this.labelLayer);
+    this.viewport.appendChild(this.uiLayer);
     this.viewport.appendChild(this.overlayLayer);
     this.svg.appendChild(this.viewport);
     this.root.appendChild(this.svg);
@@ -196,6 +231,11 @@ class Viewer implements ViewerHandle {
     this.inspector = document.createElement("aside");
     this.inspector.className = "bml-inspector";
     this.root.appendChild(this.inspector);
+
+    this.layersPanel = document.createElement("section");
+    this.layersPanel.className = "bml-layers";
+    this.root.appendChild(this.layersPanel);
+    this.bindLayersPanel();
 
     this.buildDefs();
     this.bindCanvas();
@@ -221,6 +261,60 @@ class Viewer implements ViewerHandle {
       if (!node.at) node.at = layout.get(node.id) ?? { x: 0, y: 0 };
     }
     this.doc = doc;
+    this.rebuildView();
+  }
+
+  /* ---------------------------------------------------------- visibility */
+
+  private visibility(): Visibility {
+    return resolveVisibility({
+      hiddenNodes: this.hiddenNodes,
+      hiddenGroups: this.hiddenGroups,
+      collapsedGroups: this.collapsedGroups,
+    });
+  }
+
+  private rebuildView(): void {
+    if (!this.doc) {
+      this.viewDoc = null;
+      return;
+    }
+    const visibility = this.visibility();
+    this.viewDoc = {
+      ...this.doc,
+      nodes: visibleNodes(this.doc, visibility),
+      edges: visibleEdges(this.doc, visibility),
+      groups: visibleGroups(this.doc, visibility),
+    };
+  }
+
+  /** Full bounding box of a group, including members that are hidden or folded away. */
+  private fullGroupBox(group: GroupDecl): Rect | null {
+    if (!this.doc) return null;
+    return groupBoundingBox(this.doc.nodes.filter((node) => node.group === group.id));
+  }
+
+  /** A collapsed group shrinks to a compact chip anchored at its frame origin. */
+  private collapseChip(full: Rect): Rect {
+    return { x: full.x, y: full.y, w: Math.max(180, Math.min(full.w, 300)), h: 40 };
+  }
+
+  private viewBounds(): Rect {
+    const base = contentBounds(this.viewDoc ?? this.doc!);
+    let { x, y } = base;
+    let x1 = base.x + base.w;
+    let y1 = base.y + base.h;
+    for (const group of this.doc?.groups ?? []) {
+      if (!this.collapsedGroups.has(group.id) || this.hiddenGroups.has(group.id)) continue;
+      const full = this.fullGroupBox(group);
+      if (!full) continue;
+      const chip = this.collapseChip(full);
+      x = Math.min(x, chip.x);
+      y = Math.min(y, chip.y);
+      x1 = Math.max(x1, chip.x + chip.w);
+      y1 = Math.max(y1, chip.y + chip.h);
+    }
+    return { x, y, w: x1 - x, h: y1 - y };
   }
 
   private showErrors(diagnostics: Diagnostic[]): void {
@@ -282,7 +376,7 @@ class Viewer implements ViewerHandle {
   }
 
   private render(): void {
-    if (!this.doc) return;
+    if (!this.doc || !this.viewDoc) return;
     this.nodeEls.clear();
     this.edgeEls.clear();
     this.groupEls.clear();
@@ -291,6 +385,7 @@ class Viewer implements ViewerHandle {
     this.edgeLayer.innerHTML = "";
     this.nodeLayer.innerHTML = "";
     this.labelLayer.innerHTML = "";
+    this.uiLayer.innerHTML = "";
     this.overlayLayer.innerHTML = "";
 
     const grid = el("rect", {
@@ -303,50 +398,105 @@ class Viewer implements ViewerHandle {
     this.renderNodes();
     this.renderLegend();
     this.applySelection();
+    this.renderLayersPanel();
   }
 
   private renderGroups(): void {
-    if (!this.doc) return;
-    for (const group of this.doc.groups) {
-      const members = this.doc.nodes.filter((n) => n.group === group.id);
-      const box = groupBoundingBox(members);
-      if (!box) continue;
+    if (!this.doc || !this.viewDoc) return;
+    for (const group of this.viewDoc.groups) {
+      const members = this.doc.nodes.filter((node) => node.group === group.id);
+      const full = groupBoundingBox(members);
+      if (!full) continue;
+
+      const collapsed = this.collapsedGroups.has(group.id);
+      const shown = members.filter((node) => isNodeVisible(node, this.visibility()));
+      if (!collapsed && !shown.length) continue;
+
+      const box = collapsed ? this.collapseChip(full) : groupBoundingBox(shown)!;
       const color = group.color ?? "#64748b";
+      const label = group.label ?? group.title;
+
       const rect = el("rect", {
         x: box.x, y: box.y, width: box.w, height: box.h, rx: 16,
-        fill: color, stroke: color, class: "bml-group-box",
+        fill: color, stroke: color,
+        class: collapsed ? "bml-group-box bml-collapsed" : "bml-group-box",
       }) as SVGRectElement;
       this.groupLayer.appendChild(rect);
+
       const text = el("text", {
-        x: box.x + 16, y: box.y + 21, class: "bml-group-label", fill: color,
+        x: box.x + 16, y: box.y + (collapsed ? 24 : 21),
+        class: "bml-group-label", fill: color,
       }) as SVGTextElement;
-      text.textContent = group.label ?? group.title;
+      text.textContent = collapsed
+        ? truncate(
+            `${label} · ${members.length} 节点 / ${groupEdgeCount(this.doc, group.id)} 连线`,
+            `600 10.5px ${getComputedStyle(this.root).fontFamily}`,
+            box.w - 42,
+          )
+        : label;
       this.groupLayer.appendChild(text);
-      this.groupEls.set(group.id, { rect, text });
+
+      const toggle = el("g", {
+        class: "bml-group-toggle",
+        "data-id": group.id,
+        transform: `translate(${box.x + box.w - 16} ${box.y + (collapsed ? 20 : 19)})`,
+      });
+      el("title", {}, toggle).textContent = collapsed ? `展开 ${label}` : `折叠 ${label}`;
+      el("circle", {
+        r: 9, fill: "var(--bml-panel)", stroke: color, "stroke-opacity": 0.35,
+      }, toggle);
+      const sign = el("text", {
+        y: 0.5, "text-anchor": "middle", "dominant-baseline": "central",
+        fill: color, class: "bml-toggle-sign",
+      }) as SVGTextElement;
+      sign.textContent = collapsed ? "+" : "−";
+      toggle.appendChild(sign);
+      toggle.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.stopPropagation();
+      });
+      toggle.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this.toggleGroupCollapsed(group.id);
+      });
+      this.uiLayer.appendChild(toggle);
+
+      this.groupEls.set(group.id, { rect, text, toggle, sign });
     }
   }
 
   private edgeGeometryOf(edge: EdgeDecl): EdgeGeometry | null {
-    if (!this.doc) return null;
-    return edgeGeometry(edge, { byId: new Map(this.doc.nodes.map((n) => [n.id, n])), pairs: indexPairs(this.doc) });
+    if (!this.viewDoc) return null;
+    return edgeGeometry(edge, {
+      byId: new Map(this.viewDoc.nodes.map((n) => [n.id, n])),
+      pairs: indexPairs(this.viewDoc),
+    });
   }
 
   private renderEdges(): void {
-    if (!this.doc) return;
+    if (!this.doc || !this.viewDoc) return;
     const family = getComputedStyle(this.root).fontFamily;
-    const obstacles: Rect[] = this.doc.nodes.map((n) => ({
+    const obstacles: Rect[] = this.viewDoc.nodes.map((n) => ({
       x: n.at!.x - 2, y: n.at!.y - 2, w: DEFAULT_BOX.width + 4, h: DEFAULT_BOX.height + 4,
     }));
-    for (const group of this.doc.groups) {
+    for (const group of this.viewDoc.groups) {
       const members = this.doc.nodes.filter((n) => n.group === group.id);
-      const box = groupBoundingBox(members);
+      const full = groupBoundingBox(members);
+      if (!full) continue;
+      if (this.collapsedGroups.has(group.id)) {
+        const chip = this.collapseChip(full);
+        obstacles.push({ x: chip.x, y: chip.y, w: chip.w, h: chip.h });
+        continue;
+      }
+      const shown = members.filter((node) => isNodeVisible(node, this.visibility()));
+      const box = groupBoundingBox(shown);
       if (!box) continue;
       const label = group.label ?? group.title;
       const width = textWidth(label, `600 10.5px ${family}`);
       obstacles.push({ x: box.x + 8, y: box.y + 5, w: width + 26, h: 24 });
     }
 
-    for (const edge of this.doc.edges) {
+    for (const edge of this.viewDoc.edges) {
       const geo = this.edgeGeometryOf(edge);
       if (!geo) continue;
       const style = edgeKindStyle(edge.kind);
@@ -398,9 +548,9 @@ class Viewer implements ViewerHandle {
   }
 
   private renderNodes(): void {
-    if (!this.doc) return;
+    if (!this.doc || !this.viewDoc) return;
     const family = getComputedStyle(this.root).fontFamily;
-    for (const node of this.doc.nodes) {
+    for (const node of this.viewDoc.nodes) {
       const at = node.at!;
       const style = nodeKindStyle(node.kind);
       const group = el("g", {
@@ -441,12 +591,12 @@ class Viewer implements ViewerHandle {
   }
 
   private renderLegend(): void {
-    if (this.options.showLegend === false || !this.doc) {
+    if (this.options.showLegend === false || !this.viewDoc) {
       this.legend.style.display = "none";
       return;
     }
     const seen = new Set<string>();
-    for (const node of this.doc.nodes) seen.add(node.kind);
+    for (const node of this.viewDoc.nodes) seen.add(node.kind);
     const items = [...seen].map((kind) => {
       const style = nodeKindStyle(kind);
       return `<span class="bml-item"><span class="bml-swatch" style="background:${style.color}"></span>${escape(style.label)}</span>`;
@@ -472,16 +622,19 @@ class Viewer implements ViewerHandle {
   }
 
   fit(): void {
-    if (!this.doc) return;
+    if (!this.doc || !this.viewDoc) return;
     const rect = this.svg.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
-    const bounds = contentBounds(this.doc);
+    const bounds = this.viewBounds();
     const pad = 56;
-    const k = clamp(Math.min((rect.width - pad * 2) / Math.max(bounds.w, 1),
+    // Keep the drawing clear of the floating layers panel while it is open.
+    const inset = this.layersOpen ? 296 : 0;
+    const width = Math.max(1, rect.width - inset);
+    const k = clamp(Math.min((width - pad * 2) / Math.max(bounds.w, 1),
                              (rect.height - pad * 2) / Math.max(bounds.h, 1)), 0.15, 1.2);
     this.view = {
       k,
-      x: (rect.width - bounds.w * k) / 2 - bounds.x * k,
+      x: inset + (width - bounds.w * k) / 2 - bounds.x * k,
       y: (rect.height - bounds.h * k) / 2 - bounds.y * k,
     };
     this.applyView();
@@ -539,6 +692,7 @@ class Viewer implements ViewerHandle {
 
   private onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === "Escape") {
+      if (this.layersOpen) this.toggleLayers(false);
       this.selectNode(null);
       this.selectEdge(null);
     }
@@ -558,7 +712,7 @@ class Viewer implements ViewerHandle {
     let moved = false;
     group.classList.add("bml-dragging");
 
-    const affected = this.doc?.edges.filter((e) => e.from === node.id || e.to === node.id) ?? [];
+    const affected = this.viewDoc?.edges.filter((e) => e.from === node.id || e.to === node.id) ?? [];
 
     const onMove = (e: PointerEvent) => {
       const p = this.toWorld(e.clientX, e.clientY);
@@ -642,19 +796,29 @@ class Viewer implements ViewerHandle {
   }
 
   private refreshGroups(): void {
-    if (!this.doc) return;
-    for (const group of this.doc.groups) {
+    if (!this.doc || !this.viewDoc) return;
+    const visibility = this.visibility();
+    for (const group of this.viewDoc.groups) {
       const els = this.groupEls.get(group.id);
       if (!els) continue;
       const members = this.doc.nodes.filter((n) => n.group === group.id);
-      const box = groupBoundingBox(members);
+      const full = groupBoundingBox(members);
+      if (!full) continue;
+      const collapsed = this.collapsedGroups.has(group.id);
+      const box = collapsed
+        ? this.collapseChip(full)
+        : groupBoundingBox(members.filter((node) => isNodeVisible(node, visibility)));
       if (!box) continue;
       els.rect.setAttribute("x", String(box.x));
       els.rect.setAttribute("y", String(box.y));
       els.rect.setAttribute("width", String(box.w));
       els.rect.setAttribute("height", String(box.h));
       els.text.setAttribute("x", String(box.x + 16));
-      els.text.setAttribute("y", String(box.y + 21));
+      els.text.setAttribute("y", String(box.y + (collapsed ? 24 : 21)));
+      els.toggle.setAttribute(
+        "transform",
+        `translate(${box.x + box.w - 16} ${box.y + (collapsed ? 20 : 19)})`,
+      );
     }
   }
 
@@ -708,8 +872,8 @@ class Viewer implements ViewerHandle {
   /** Dim everything that is not on the hovered/selected node. */
   private applyFocus(): void {
     const focus = this.selectedNode ?? this.hoveredNode;
-    const edges = this.doc ? relatedEdges(this.doc, focus) : new Set<string>();
-    const nodes = this.doc ? relatedNodes(this.doc, focus) : new Set<string>();
+    const edges = this.viewDoc ? relatedEdges(this.viewDoc, focus) : new Set<string>();
+    const nodes = this.viewDoc ? relatedNodes(this.viewDoc, focus) : new Set<string>();
     this.root.classList.toggle("bml-focusing", Boolean(focus));
     for (const [id, els] of this.edgeEls) {
       const related = edges.has(id);
@@ -833,6 +997,174 @@ class Viewer implements ViewerHandle {
     this.fit();
   }
 
+  /* ----------------------------------------------------------- visibility */
+
+  toggleLayers(open: boolean = !this.layersOpen): void {
+    this.layersOpen = open;
+    this.layersPanel.classList.toggle("bml-open", open);
+    if (open) this.renderLayersPanel();
+  }
+
+  toggleGroupCollapsed(id: string): void {
+    if (!this.doc?.groups.some((group) => group.id === id)) return;
+    if (this.collapsedGroups.has(id)) this.collapsedGroups.delete(id);
+    else this.collapsedGroups.add(id);
+    this.afterVisibilityChange();
+  }
+
+  setHiddenNodes(ids: string[]): void {
+    this.hiddenNodes = new Set(ids);
+    this.afterVisibilityChange();
+  }
+
+  setHiddenGroups(ids: string[]): void {
+    this.hiddenGroups = new Set(ids);
+    this.afterVisibilityChange();
+  }
+
+  setCollapsedGroups(ids: string[]): void {
+    this.collapsedGroups = new Set(ids);
+    this.afterVisibilityChange();
+  }
+
+  showAll(): void {
+    if (!this.hiddenNodes.size && !this.hiddenGroups.size && !this.collapsedGroups.size) return;
+    this.hiddenNodes.clear();
+    this.hiddenGroups.clear();
+    this.collapsedGroups.clear();
+    this.afterVisibilityChange();
+  }
+
+  getVisibility(): ViewerVisibility {
+    return {
+      hiddenNodes: [...this.hiddenNodes],
+      hiddenGroups: [...this.hiddenGroups],
+      collapsedGroups: [...this.collapsedGroups],
+    };
+  }
+
+  private afterVisibilityChange(): void {
+    this.rebuildView();
+    this.syncSelectionToView();
+    this.render();
+    this.options.onVisibilityChange?.(this.getVisibility());
+  }
+
+  /** Drop selections that just became invisible; they must not linger off-canvas. */
+  private syncSelectionToView(): void {
+    const nodeIds = new Set(this.viewDoc?.nodes.map((node) => node.id) ?? []);
+    const edgeIds = new Set(this.viewDoc?.edges.map((edge) => edge.id) ?? []);
+    if (this.hoveredNode && !nodeIds.has(this.hoveredNode)) this.hoveredNode = null;
+    if (this.selectedNode && !nodeIds.has(this.selectedNode)) {
+      this.selectedNode = null;
+      this.closeInspector();
+    }
+    if (this.selectedEdge && !edgeIds.has(this.selectedEdge)) {
+      this.selectedEdge = null;
+      this.closeInspector();
+    }
+  }
+
+  private bindLayersPanel(): void {
+    this.layersPanel.addEventListener("change", (event) => {
+      const input = event.target as HTMLInputElement;
+      if (input.tagName !== "INPUT") return;
+      const groupId = input.dataset.group;
+      if (groupId !== undefined) {
+        if (input.checked) this.hiddenGroups.delete(groupId);
+        else this.hiddenGroups.add(groupId);
+        this.afterVisibilityChange();
+        return;
+      }
+      const nodeId = input.dataset.node;
+      if (nodeId === undefined) return;
+      if (input.checked) this.hiddenNodes.delete(nodeId);
+      else this.hiddenNodes.add(nodeId);
+      this.afterVisibilityChange();
+    });
+
+    this.layersPanel.addEventListener("click", (event) => {
+      const button = (event.target as Element).closest("button");
+      if (!button) return;
+      const fold = button.dataset.fold;
+      if (fold !== undefined) {
+        this.toggleGroupCollapsed(fold);
+        return;
+      }
+      if (button.dataset.showAll !== undefined) {
+        this.showAll();
+        return;
+      }
+      if (button.dataset.layersClose !== undefined) this.toggleLayers(false);
+    });
+  }
+
+  private renderLayersPanel(): void {
+    if (!this.layersOpen) return;
+    if (!this.doc || !this.viewDoc) {
+      this.layersPanel.innerHTML = "";
+      return;
+    }
+    const visibility = this.visibility();
+    const known = new Set(this.doc.groups.map((group) => group.id));
+    const blocks: string[] = [];
+
+    for (const group of this.doc.groups) {
+      const members = this.doc.nodes.filter((node) => node.group === group.id);
+      const collapsed = this.collapsedGroups.has(group.id);
+      const hidden = this.hiddenGroups.has(group.id);
+      const label = escape(group.label ?? group.title);
+      const rows = members.map((node) => this.layerNodeRow(node, visibility)).join("");
+      blocks.push(`
+        <div class="bml-layer-group">
+          <div class="bml-layer-row${hidden ? " bml-muted" : ""}">
+            <label class="bml-layer-check">
+              <input type="checkbox" data-group="${escape(group.id)}"${hidden ? "" : " checked"}>
+              <span class="bml-layer-name">${label}</span>
+            </label>
+            <span class="bml-layer-count">${members.length}</span>
+            <button class="bml-layer-fold" data-fold="${escape(group.id)}" title="折叠组成员，只留组框">${collapsed ? "展开" : "折叠"}</button>
+          </div>
+          ${rows}
+        </div>`);
+    }
+
+    const loose = this.doc.nodes.filter((node) => !node.group || !known.has(node.group));
+    if (loose.length) {
+      blocks.push(`
+        <div class="bml-layer-group">
+          <div class="bml-layer-row">
+            <span class="bml-layer-name">未分组</span>
+            <span class="bml-layer-count">${loose.length}</span>
+          </div>
+          ${loose.map((node) => this.layerNodeRow(node, visibility)).join("")}
+        </div>`);
+    }
+
+    this.layersPanel.innerHTML = `
+      <div class="bml-layers-head">
+        <b>图层</b>
+        <span class="bml-layers-meta">仅影响视图</span>
+        <button class="bml-close" data-layers-close title="关闭">×</button>
+      </div>
+      <div class="bml-layers-body">${blocks.join("")}</div>
+      <div class="bml-layers-foot">
+        <span>不写回源码</span>
+        <button data-show-all>全部显示</button>
+      </div>`;
+  }
+
+  private layerNodeRow(node: NodeDecl, visibility: Visibility): string {
+    const hidden = this.hiddenNodes.has(node.id);
+    // Muted marks a node that is hidden indirectly (its group is hidden or collapsed).
+    const muted = !hidden && !isNodeVisible(node, visibility);
+    return `
+      <label class="bml-layer-row bml-layer-node${muted ? " bml-muted" : ""}">
+        <input type="checkbox" data-node="${escape(node.id)}"${hidden ? "" : " checked"}>
+        <span class="bml-layer-name">${escape(nodeDisplayName(node))}</span>
+      </label>`;
+  }
+
   update(source: string): void {
     this.source = source;
     this.parse(source);
@@ -856,10 +1188,11 @@ class Viewer implements ViewerHandle {
     const clone = this.svg.cloneNode(true) as SVGSVGElement;
     clone.setAttribute("xmlns", SVGNS);
     clone.querySelector(".bml-overlay")?.remove();
+    clone.querySelector(".bml-ui")?.remove();
     clone.querySelector(".bml-groups > rect[fill^='url']")?.remove();
 
-    if (this.doc) {
-      const bounds = contentBounds(this.doc);
+    if (this.doc && this.viewDoc) {
+      const bounds = this.viewBounds();
       const pad = 40;
       clone.setAttribute("viewBox", `${bounds.x - pad} ${bounds.y - pad} ${bounds.w + pad * 2} ${bounds.h + pad * 2}`);
       clone.setAttribute("width", String(Math.ceil(bounds.w + pad * 2)));

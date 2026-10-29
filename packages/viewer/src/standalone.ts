@@ -66,7 +66,7 @@ export function renderStandaloneHTML(options: StandaloneOptions): string {
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%2394a3b8' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
     background-repeat:no-repeat;background-position:right 7px center;
   }
-  #blockml-app{position:relative;padding-top:44px}
+  #blockml-app{position:relative;box-sizing:border-box;padding-top:44px}
   #blockml-mount{position:absolute;inset:44px 0 0 0}
 ${options.viewerCss}
 </style>
@@ -77,6 +77,7 @@ ${options.viewerCss}
     <span class="name">${escapeHtml(title)}</span>
     <span class="badge">.blockml</span>
     <span class="grow"></span>
+    <button data-act="layers" title="显示 / 隐藏分组与节点">图层</button>
     <select id="blockml-layout" title="重新排列（会覆盖手工坐标）">
       <option value="">手工布局</option>
       <option value="layered">从左到右</option>
@@ -106,6 +107,7 @@ ${options.viewerCss}
   window.__blockmlGetSource = function(){ return handle.getSource(); };
   var actions = {
     "fit": function(){ handle.fit(); },
+    "layers": function(){ handle.toggleLayers(); },
     "zoom-in": function(){ handle.zoomTo(handle.getView().k * 1.25); },
     "zoom-out": function(){ handle.zoomTo(handle.getView().k / 1.25); },
     "download": function(){
