@@ -1699,28 +1699,56 @@ class Viewer implements ViewerHandle {
     clone.querySelector(".bml-overlay")?.remove();
     clone.querySelector(".bml-ui")?.remove();
     clone.querySelector(".bml-groups > rect[fill^='url']")?.remove();
+    // 交互件与临时态不属于图本身
+    clone.querySelectorAll(".bml-group-toggle, .bml-bend-handle, .bml-bend-line, .bml-edge-hit").forEach((el) => el.remove());
+    clone.querySelectorAll(".bml-selected, .bml-dragging, .bml-related, .bml-focus-node").forEach((el) => {
+      el.classList.remove("bml-selected", "bml-dragging", "bml-related", "bml-focus-node");
+    });
+
+    // 导出与屏幕同源：沿用 VIEWER_CSS，并把主题变量解析成具体值挂到 <svg> 上，
+    // 否则 var(--bml-*) 未定义会让底色、标签底板等退回默认黑色。
+    const computed = getComputedStyle(this.root);
+    const vars = [
+      "--bml-bg",
+      "--bml-panel",
+      "--bml-ink",
+      "--bml-ink-2",
+      "--bml-ink-3",
+      "--bml-line",
+      "--bml-accent",
+      "--bml-grid",
+      "--bml-label-bg",
+    ];
+    const declared = vars.map((name) => `${name}:${computed.getPropertyValue(name).trim()}`).join(";");
+    clone.setAttribute("style", `${declared};font-family:${computed.fontFamily}`);
 
     if (this.doc && this.viewDoc) {
       const bounds = this.viewBounds();
       const pad = 40;
+      const width = Math.ceil(bounds.w + pad * 2);
+      const height = Math.ceil(bounds.h + pad * 2);
       clone.setAttribute("viewBox", `${bounds.x - pad} ${bounds.y - pad} ${bounds.w + pad * 2} ${bounds.h + pad * 2}`);
-      clone.setAttribute("width", String(Math.ceil(bounds.w + pad * 2)));
-      clone.setAttribute("height", String(Math.ceil(bounds.h + pad * 2)));
+      clone.setAttribute("width", String(width));
+      clone.setAttribute("height", String(height));
+
+      const paper = document.createElementNS(SVGNS, "rect");
+      paper.setAttribute("x", String(bounds.x - pad));
+      paper.setAttribute("y", String(bounds.y - pad));
+      paper.setAttribute("width", String(bounds.w + pad * 2));
+      paper.setAttribute("height", String(bounds.h + pad * 2));
+      paper.setAttribute("fill", computed.getPropertyValue("--bml-bg").trim());
+      clone.insertBefore(paper, clone.firstChild);
     }
     clone.querySelector(".bml-viewport")?.removeAttribute("transform");
 
+    // 深色主题下两条按 .bml-root[data-bml-theme] 生效的规则，导出克隆里没有 .bml-root，补回来。
+    const darkRules =
+      this.root.dataset.bmlTheme === "dark"
+        ? ".bml-node-box{stroke:#243146}.bml-edge-label{fill:#93a3b8}"
+        : "";
+
     const style = document.createElementNS(SVGNS, "style");
-    style.textContent = `
-      text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
-      .bml-node-box{fill:#fff;stroke:#dbe2ea;stroke-width:1.2}
-      .bml-node-title{font-weight:600;font-size:13px;fill:#0f172a}
-      .bml-node-tech{font-size:10.5px;fill:#7c8999}
-      .bml-group-label{font-size:10.5px;font-weight:600;letter-spacing:.06em}
-      .bml-edge-line{fill:none;stroke-width:1.6}
-      .bml-edge-label{font-size:10.5px;fill:#5c6b7f}
-      .bml-edge-label-bg{fill:#f7f8fa}
-      .bml-edge-hit{display:none}
-    `;
+    style.textContent = `${VIEWER_CSS}\n${darkRules}`;
     clone.insertBefore(style, clone.firstChild);
 
     return new XMLSerializer().serializeToString(clone);
