@@ -1,0 +1,30 @@
+// 最小可用模板：删掉不需要的块，保留结构
+diagram {
+  title: "系统名称"
+  subtitle: "一句话说明这张图回答什么问题"
+}
+
+group core "核心" {
+  color: #4f46e5
+}
+
+node app "app" {
+  group: core
+  kind: service
+  tech: "运行时 + 端口"
+  note: """
+这个节点是什么、为什么存在。
+"""
+  src: "docs/architecture.md:1-20"
+}
+
+node db "PostgreSQL" {
+  group: core
+  kind: db
+  tech: "库名"
+}
+
+edge app -> db "JDBC" {
+  kind: sql
+  src: "docs/architecture.md:42"
+}

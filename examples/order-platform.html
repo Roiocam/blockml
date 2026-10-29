@@ -1,0 +1,2543 @@
+<!doctype html>
+<html lang="zh-CN" data-bml-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>订单平台 · 架构示例</title>
+<style>
+  html,body{margin:0;height:100%;background:#f7f8fa}
+  #blockml-app{height:100%}
+  #blockml-bar{
+    position:absolute;top:0;left:0;right:0;height:44px;display:flex;align-items:center;gap:10px;
+    padding:0 14px;z-index:20;font:500 12px/1 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;
+    color:#475569;
+    background:rgba(255,255,255,.86);
+    border-bottom:1px solid #e2e8f0;
+    backdrop-filter:blur(8px);
+  }
+  #blockml-bar .grow{flex:1}
+  #blockml-bar .name{font-weight:650;color:#0f172a;font-size:12.5px}
+  #blockml-bar .badge{font:500 10px/1 ui-monospace,monospace;padding:3px 6px;border-radius:5px;
+    background:#f1f5f9;color:#64748b}
+  #blockml-bar button{
+    appearance:none;border:1px solid #e2e8f0;
+    background:#fff;
+    color:#475569;
+    font:500 11.5px/1 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;
+    padding:6px 9px;border-radius:6px;cursor:pointer;
+  }
+  #blockml-bar button:hover{filter:brightness(.97)}
+  #blockml-bar select{
+    appearance:none;border:1px solid #e2e8f0;
+    background:#fff;
+    color:#475569;
+    font:500 11.5px/1 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;
+    padding:6px 22px 6px 9px;border-radius:6px;cursor:pointer;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%2394a3b8' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 7px center;
+  }
+  #blockml-app{position:relative;padding-top:44px}
+  #blockml-mount{position:absolute;inset:44px 0 0 0}
+
+.bml-root{
+  --bml-bg:#f7f8fa;
+  --bml-panel:#ffffff;
+  --bml-ink:#0f172a;
+  --bml-ink-2:#475569;
+  --bml-ink-3:#94a3b8;
+  --bml-line:#e2e8f0;
+  --bml-accent:#4f46e5;
+  --bml-grid:#dfe5ec;
+  --bml-label-bg:#f7f8fa;
+  position:relative;
+  display:flex;
+  flex-direction:column;
+  height:100%;
+  min-height:0;
+  background:var(--bml-bg);
+  color:var(--bml-ink);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.bml-root[data-bml-theme="dark"]{
+  --bml-bg:#0b1220;
+  --bml-panel:#0f172a;
+  --bml-ink:#e2e8f0;
+  --bml-ink-2:#94a3b8;
+  --bml-ink-3:#64748b;
+  --bml-line:#1e293b;
+  --bml-grid:#1b2637;
+  --bml-label-bg:#0b1220;
+}
+.bml-svg{flex:1;width:100%;height:100%;display:block;touch-action:none;cursor:default}
+.bml-root.bml-readonly .bml-node{cursor:default}
+.bml-grid-dot{fill:var(--bml-grid)}
+.bml-group-box{fill-opacity:.06;stroke-opacity:.3;stroke-width:1.2}
+.bml-group-label{font:600 10.5px/1 inherit;letter-spacing:.06em;text-transform:uppercase}
+.bml-node{cursor:grab}
+.bml-node.bml-dragging{cursor:grabbing}
+.bml-node-box{fill:var(--bml-panel);stroke:#dbe2ea;stroke-width:1.2;filter:url(#bml-node-shadow)}
+.bml-root[data-bml-theme="dark"] .bml-node-box{stroke:#243146}
+.bml-node:hover .bml-node-box{stroke:#b9c4d2}
+.bml-node.bml-selected .bml-node-box{stroke:var(--bml-accent);stroke-width:2;filter:url(#bml-node-shadow-sel)}
+.bml-node-title{font:600 13px/1 inherit;fill:var(--bml-ink);pointer-events:none}
+.bml-node-tech{font:400 10.5px/1 inherit;fill:#7c8999;pointer-events:none}
+.bml-edge{transition:opacity .12s ease}
+.bml-focusing .bml-edge{opacity:.14}
+.bml-focusing .bml-edge.bml-related{opacity:1}
+.bml-focusing .bml-edge.bml-related .bml-edge-line{stroke-width:2.3}
+.bml-focusing .bml-edge.bml-related .bml-edge-label{fill:var(--bml-ink);font-weight:600}
+.bml-node{transition:opacity .12s ease}
+.bml-focusing .bml-node:not(.bml-focus-node){opacity:.55}
+.bml-edge-line{fill:none;stroke-width:1.6;pointer-events:none}
+.bml-edge-hit{fill:none;stroke:transparent;stroke-width:16;cursor:pointer}
+.bml-edge-label{font:500 10.5px/1 inherit;fill:#5c6b7f;pointer-events:none}
+.bml-root[data-bml-theme="dark"] .bml-edge-label{fill:#93a3b8}
+.bml-edge-label-bg{fill:var(--bml-label-bg);pointer-events:none}
+.bml-edge.bml-selected .bml-edge-line{stroke-width:2.6}
+.bml-edge.bml-selected{opacity:1}
+.bml-edge.bml-selected .bml-edge-label{fill:var(--bml-ink);font-weight:600}
+.bml-label-group{pointer-events:auto;cursor:pointer}
+.bml-bend-handle{fill:var(--bml-panel);stroke:var(--bml-accent);stroke-width:2;cursor:move}
+.bml-bend-line{stroke:var(--bml-accent);stroke-width:1;stroke-dasharray:3 3;fill:none;opacity:.5}
+.bml-legend{
+  position:absolute;left:14px;bottom:14px;display:flex;flex-wrap:wrap;gap:6px 12px;
+  max-width:min(560px,60%);padding:9px 11px;font-size:11px;color:var(--bml-ink-2);
+  background:color-mix(in srgb,var(--bml-panel) 92%,transparent);
+  border:1px solid var(--bml-line);border-radius:10px;
+  box-shadow:0 4px 16px rgba(15,23,42,.06);backdrop-filter:blur(6px);
+}
+.bml-legend b{font-weight:600;color:var(--bml-ink);font-size:10.5px;margin-right:2px}
+.bml-legend .bml-item{display:inline-flex;align-items:center;gap:5px}
+.bml-legend .bml-swatch{width:10px;height:10px;border-radius:3px;flex:0 0 auto}
+.bml-hint{
+  position:absolute;right:14px;bottom:14px;padding:6px 10px;font-size:11px;color:var(--bml-ink-3);
+  background:color-mix(in srgb,var(--bml-panel) 90%,transparent);
+  border:1px solid var(--bml-line);border-radius:8px;box-shadow:0 2px 10px rgba(15,23,42,.05);
+}
+.bml-hint kbd{
+  font:500 10px/1 ui-monospace,monospace;background:var(--bml-bg);border:1px solid var(--bml-line);
+  border-bottom-width:2px;border-radius:4px;padding:2px 4px;color:var(--bml-ink-2);
+}
+.bml-inspector{
+  position:absolute;top:0;right:0;bottom:0;width:340px;display:flex;flex-direction:column;
+  background:var(--bml-panel);border-left:1px solid var(--bml-line);
+  box-shadow:-8px 0 24px rgba(15,23,42,.06);
+  transform:translateX(100%);transition:transform .16s ease;z-index:5;
+}
+.bml-inspector.bml-open{transform:translateX(0)}
+.bml-inspector-head{display:flex;align-items:flex-start;gap:8px;padding:14px 14px 10px;border-bottom:1px solid var(--bml-line)}
+.bml-kind-dot{width:8px;height:8px;border-radius:3px;margin-top:5px;flex:0 0 auto}
+.bml-inspector-head h2{margin:0;font-size:14px;font-weight:650;line-height:1.3;word-break:break-all;color:var(--bml-ink)}
+.bml-inspector-meta{font-size:11.5px;color:var(--bml-ink-3);margin-top:3px;font-family:ui-monospace,monospace}
+.bml-close{margin-left:auto;border:none;background:transparent;color:var(--bml-ink-3);cursor:pointer;font-size:16px;line-height:1;padding:2px 4px;border-radius:4px}
+.bml-close:hover{background:var(--bml-bg);color:var(--bml-ink)}
+.bml-inspector-body{padding:12px 14px 24px;overflow:auto;flex:1;font-size:12.5px;line-height:1.6;color:var(--bml-ink-2)}
+.bml-inspector-body h3{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--bml-ink-3);margin:16px 0 6px;font-weight:600}
+.bml-inspector-body h3:first-child{margin-top:0}
+.bml-inspector-body p{margin:0 0 8px;white-space:pre-wrap}
+.bml-inspector-body code{font-family:ui-monospace,monospace;font-size:11px;background:var(--bml-bg);padding:1px 5px;border-radius:4px;color:var(--bml-ink-2);word-break:break-all}
+.bml-edge-item{display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px dashed var(--bml-line)}
+.bml-edge-item:last-child{border-bottom:none}
+.bml-edge-item .bml-arrow{font-family:ui-monospace,monospace;color:var(--bml-ink-3);font-size:11px;padding-top:1px}
+.bml-edge-item .bml-t{font-size:12px;color:var(--bml-ink)}
+.bml-edge-item .bml-l{font-size:11px;color:var(--bml-ink-3);font-family:ui-monospace,monospace;word-break:break-all}
+.bml-error{
+  position:absolute;left:14px;top:14px;max-width:min(560px,70%);padding:10px 12px;
+  background:#fef2f2;border:1px solid #fecaca;border-radius:10px;color:#991b1b;
+  font-size:11.5px;line-height:1.55;z-index:6;box-shadow:0 8px 24px rgba(153,27,27,.12);
+}
+.bml-error b{font-weight:650}
+.bml-error code{font-family:ui-monospace,monospace;font-size:10.5px;background:#fee2e2;padding:0 4px;border-radius:3px}
+
+</style>
+</head>
+<body>
+<div id="blockml-app">
+  <div id="blockml-bar">
+    <span class="name">订单平台 · 架构示例</span>
+    <span class="badge">.blockml</span>
+    <span class="grow"></span>
+    <select id="blockml-layout" title="重新排列（会覆盖手工坐标）">
+      <option value="">手工布局</option>
+      <option value="layered">从左到右</option>
+      <option value="pipeline">Pipeline</option>
+      <option value="snowflake">雪花形</option>
+      <option value="compact">紧凑型</option>
+    </select>
+    <button data-act="fit">适应窗口</button>
+    <button data-act="zoom-in">＋</button>
+    <button data-act="zoom-out">－</button>
+    <button data-act="download">下载源码</button>
+  </div>
+  <div id="blockml-mount"></div>
+</div>
+<script id="blockml-source" type="application/json">"// 示例：一个虚构的电商订单平台\n// 用来演示分层、多种 kind、并行边与可选依赖；所有系统名、域名、路径均为虚构\n\ndiagram {\n  title: \"订单平台 · 架构示例\"\n  subtitle: \"diagram-as-code · 拖动节点或选中连线后拖中点\"\n}\n\ngroup access \"接入层\" {\n  color: #f59e0b\n}\n\ngroup core \"核心服务\" {\n  color: #4f46e5\n}\n\ngroup data \"数据面\" {\n  color: #10b981\n}\n\ngroup partner \"外部合作方\" {\n  color: #8b5cf6\n}\n\nnode storefront \"web-storefront\" {\n  at: 80, 80\n  group: access\n  kind: ui\n  tech: \"React SPA · /shop\"\n  note: \"面向买家的页面，只调用 Gateway，不直连任何后端服务。\"\n  src: \"docs/frontend.md:12\"\n}\n\nnode gateway \"api-gateway\" {\n  at: 80, 198\n  group: access\n  kind: service\n  tech: \"Spring Cloud Gateway · 8080\"\n  note: \"唯一对外入口，负责鉴权、限流与请求转发。\"\n  src: \"docs/services/gateway.md:8-24\"\n}\n\nnode console \"ops-console\" {\n  at: 80, 316\n  group: access\n  kind: ui\n  tech: \"内部控制台 · /ops\"\n  note: \"运营与客服使用，走同一网关但独立路由前缀。\"\n}\n\nnode order \"order-service\" {\n  at: 390, 80\n  group: core\n  kind: service\n  tech: \"Go 1.22 · 8081\"\n  note: \"\"\"\n订单生命周期：创建、支付、取消、退款。\n所有状态变更写 PostgreSQL，并投递一条领域事件给异步侧。\"\"\"\n  src: \"docs/services/order.md:1-40\"\n}\n\nnode inventory \"inventory-service\" {\n  at: 390, 198\n  group: core\n  kind: service\n  tech: \"Go 1.22 · 8082\"\n  note: \"库存预留与释放；用 Redis 做热点 SKU 的预扣计数。\"\n  src: \"docs/services/inventory.md:5-33\"\n}\n\nnode payment \"payment-service\" {\n  at: 390, 316\n  group: core\n  kind: service\n  tech: \"Go 1.22 · 8083\"\n  note: \"对接支付渠道；不落卡号，只保存渠道侧的 payment intent 引用。\"\n  src: \"docs/services/payment.md:3-21\"\n}\n\nnode worker \"event-worker\" {\n  at: 390, 434\n  group: core\n  kind: service\n  tech: \"Go 1.22 · 后台消费\"\n  note: \"消费订单事件，做通知、对账与埋点，失败进重试队列。\"\n}\n\nnode analytics \"analytics-service\" {\n  at: 390, 552\n  group: core\n  kind: service\n  tech: \"Python 3.12 · 只读\"\n  note: \"只读副本查询，生成日报与漏斗指标。\"\n}\n\nnode pg \"PostgreSQL\" {\n  at: 700, 80\n  group: data\n  kind: db\n  tech: \"orders · 主从\"\n  note: \"订单与库存的权威数据；analytics 走只读副本。\"\n  src: \"docs/db/orders.md:4-18\"\n}\n\nnode redis \"Redis\" {\n  at: 700, 198\n  group: data\n  kind: cache\n  tech: \"库存预扣 · 会话\"\n  note: \"缓存与短期计数，可丢；不承载权威状态。\"\n}\n\nnode stripe \"Stripe\" {\n  at: 1010, 80\n  group: partner\n  kind: ext\n  tech: \"支付渠道 · HTTPS\"\n  note: \"外部支付服务，webhook 回调到 gateway 的 /hooks/stripe。\"\n  src: \"docs/integrations/stripe.md:2-9\"\n}\n\nnode mailer \"SendGrid\" {\n  at: 1010, 198\n  group: partner\n  kind: ext\n  tech: \"邮件投递 · HTTPS\"\n  note: \"事务邮件；失败只降级为站内信，不阻塞下单。\"\n}\n\nedge storefront -> gateway \"REST\" {\n  kind: rest\n}\n\nedge console -> gateway \"REST\" {\n  kind: rest\n}\n\nedge gateway -> order \"/orders\" {\n  kind: rest\n  src: \"docs/services/gateway.md:31\"\n}\n\nedge gateway -> inventory \"/stock\" {\n  kind: rest\n}\n\nedge order -> inventory \"gRPC 预占\" {\n  kind: rpc\n}\n\nedge order -> payment \"gRPC 扣款\" {\n  kind: rpc\n}\n\nedge order -> pg \"orders\" {\n  kind: sql\n}\n\nedge order -> redis \"预扣\" {\n  kind: sql\n}\n\nedge inventory -> pg \"stock\" {\n  kind: sql\n}\n\nedge inventory -> redis \"热点\" {\n  kind: sql\n}\n\nedge payment -> stripe \"PaymentIntent\" {\n  kind: rest\n  via: 0, -50\n}\n\nedge payment -> pg \"payment_ref\" {\n  kind: sql\n  via: 70, 0\n}\n\nedge order -> worker \"领域事件\" {\n  kind: sse\n}\n\nedge worker -> mailer \"HTTPS 发信\" {\n  kind: rest\n}\n\nedge analytics -> pg \"只读副本\" {\n  kind: sql\n}\n\nedge worker -> analytics \"指标上报\" {\n  kind: opt\n}\n"</script>
+<script>"use strict";
+var BlockML = (() => {
+  var __defProp = Object.defineProperty;
+  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
+  };
+  var __copyProps = (to, from, except, desc) => {
+    if (from && typeof from === "object" || typeof from === "function") {
+      for (let key of __getOwnPropNames(from))
+        if (!__hasOwnProp.call(to, key) && key !== except)
+          __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+    }
+    return to;
+  };
+  var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+  // packages/viewer/src/index.ts
+  var index_exports = {};
+  __export(index_exports, {
+    VIEWER_CSS: () => VIEWER_CSS,
+    mount: () => mount,
+    renderStandaloneHTML: () => renderStandaloneHTML
+  });
+
+  // packages/core/src/ast.ts
+  function hasErrors(diagnostics) {
+    return diagnostics.some((d) => d.severity === "error");
+  }
+  function nodeDisplayName(node) {
+    return node.label ?? node.title ?? node.id;
+  }
+  function edgeDisplayName(edge) {
+    return edge.label ?? edge.title ?? `${edge.from} -> ${edge.to}`;
+  }
+
+  // packages/core/src/tokenizer.ts
+  var PUNCT = /* @__PURE__ */ new Set(["{", "}", "[", "]", ":", ",", ";"]);
+  function isDigit(ch) {
+    return ch >= "0" && ch <= "9";
+  }
+  function isIdentStart(ch) {
+    return ch >= "a" && ch <= "z" || ch >= "A" && ch <= "Z" || ch === "_";
+  }
+  function isIdentPart(ch) {
+    return isIdentStart(ch) || isDigit(ch) || ch === "." || ch === "-";
+  }
+  function isHex(ch) {
+    return isDigit(ch) || ch >= "a" && ch <= "f" || ch >= "A" && ch <= "F";
+  }
+  function readColor(cursor, src) {
+    let i = cursor + 1;
+    while (i < src.length && isHex(src[i])) i++;
+    const digits = src.slice(cursor + 1, i);
+    if (digits.length !== 3 && digits.length !== 6) return null;
+    const next = src[i];
+    if (next !== void 0 && !/[\s,}\];]/.test(next)) return null;
+    return src.slice(cursor, i);
+  }
+  function tokenize(src) {
+    const tokens = [];
+    const diagnostics = [];
+    let i = 0;
+    let line = 1;
+    let column = 1;
+    const push = (type, value, start, startLine, startColumn) => {
+      tokens.push({ type, value, line: startLine, column: startColumn, start, end: i });
+    };
+    while (i < src.length) {
+      const ch = src[i];
+      if (ch === "\r") {
+        i++;
+        continue;
+      }
+      if (ch === "\n") {
+        push("newline", "\n", i, line, column);
+        i++;
+        line++;
+        column = 1;
+        continue;
+      }
+      if (ch === " " || ch === "	") {
+        i++;
+        column++;
+        continue;
+      }
+      if (ch === "/" && src[i + 1] === "/") {
+        while (i < src.length && src[i] !== "\n") i++;
+        continue;
+      }
+      if (ch === "#") {
+        const color = readColor(i, src);
+        if (color) {
+          const start = i;
+          const startLine = line;
+          const startColumn = column;
+          i += color.length;
+          column += color.length;
+          push("color", color, start, startLine, startColumn);
+          continue;
+        }
+        while (i < src.length && src[i] !== "\n") i++;
+        continue;
+      }
+      if (ch === '"' && src.startsWith('"""', i)) {
+        const start = i;
+        const startLine = line;
+        const startColumn = column;
+        i += 3;
+        column += 3;
+        if (src[i] === "\r") {
+          i++;
+        }
+        if (src[i] === "\n") {
+          i++;
+          line++;
+          column = 1;
+        }
+        const bodyStart = i;
+        let closed = false;
+        while (i < src.length) {
+          if (src.startsWith('"""', i)) {
+            closed = true;
+            break;
+          }
+          if (src[i] === "\n") {
+            line++;
+            column = 1;
+            i++;
+            continue;
+          }
+          i++;
+          column++;
+        }
+        if (!closed) {
+          diagnostics.push({
+            severity: "error",
+            code: "BLK003",
+            message: '\u591A\u884C\u5B57\u7B26\u4E32\u6CA1\u6709\u95ED\u5408\uFF08\u7F3A\u5C11\u7ED3\u5C3E\u7684 """\uFF09',
+            line: startLine,
+            column: startColumn,
+            hint: '\u8865\u4E0A\u7ED3\u5C3E\u7684 """\uFF0C\u6216\u6539\u7528\u5355\u884C\u53CC\u5F15\u53F7\u5B57\u7B26\u4E32'
+          });
+          break;
+        }
+        let body = src.slice(bodyStart, i);
+        i += 3;
+        column += 3;
+        if (body.endsWith("\n")) body = body.slice(0, -1);
+        push("string", body, start, startLine, startColumn);
+        continue;
+      }
+      if (ch === '"') {
+        const start = i;
+        const startLine = line;
+        const startColumn = column;
+        i++;
+        column++;
+        let value = "";
+        let closed = false;
+        while (i < src.length) {
+          const c = src[i];
+          if (c === "\\") {
+            const next = src[i + 1];
+            if (next === void 0) break;
+            if (next === "n") value += "\n";
+            else if (next === "t") value += "	";
+            else if (next === '"') value += '"';
+            else if (next === "\\") value += "\\";
+            else value += next;
+            i += 2;
+            column += 2;
+            continue;
+          }
+          if (c === '"') {
+            closed = true;
+            i++;
+            column++;
+            break;
+          }
+          if (c === "\n") break;
+          value += c;
+          i++;
+          column++;
+        }
+        if (!closed) {
+          diagnostics.push({
+            severity: "error",
+            code: "BLK003",
+            message: "\u5B57\u7B26\u4E32\u6CA1\u6709\u95ED\u5408\uFF08\u7F3A\u5C11\u7ED3\u5C3E\u7684\u53CC\u5F15\u53F7\uFF09",
+            line: startLine,
+            column: startColumn,
+            hint: '\u8865\u4E0A\u7ED3\u5C3E\u7684 "'
+          });
+          break;
+        }
+        push("string", value, start, startLine, startColumn);
+        continue;
+      }
+      if (ch === "-" && src[i + 1] === ">") {
+        const start = i;
+        i += 2;
+        column += 2;
+        push("->", "->", start, line, column - 2);
+        continue;
+      }
+      if (isDigit(ch) || ch === "-" && isDigit(src[i + 1] ?? "")) {
+        const start = i;
+        const startLine = line;
+        const startColumn = column;
+        if (ch === "-") {
+          i++;
+          column++;
+        }
+        while (i < src.length && isDigit(src[i])) {
+          i++;
+          column++;
+        }
+        if (src[i] === "." && isDigit(src[i + 1] ?? "")) {
+          i++;
+          column++;
+          while (i < src.length && isDigit(src[i])) {
+            i++;
+            column++;
+          }
+        }
+        push("number", src.slice(start, i), start, startLine, startColumn);
+        continue;
+      }
+      if (isIdentStart(ch)) {
+        const start = i;
+        const startLine = line;
+        const startColumn = column;
+        while (i < src.length && isIdentPart(src[i])) {
+          if (src[i] === "-" && src[i + 1] === ">") break;
+          i++;
+          column++;
+        }
+        push("ident", src.slice(start, i), start, startLine, startColumn);
+        continue;
+      }
+      if (PUNCT.has(ch)) {
+        const start = i;
+        i++;
+        column++;
+        push(ch, ch, start, line, column - 1);
+        continue;
+      }
+      diagnostics.push({
+        severity: "error",
+        code: "BLK001",
+        message: `\u65E0\u6CD5\u8BC6\u522B\u7684\u5B57\u7B26 "${ch}"`,
+        line,
+        column,
+        hint: "\u68C0\u67E5\u662F\u5426\u7528\u4E86\u4E0D\u652F\u6301\u7684\u5355\u5F15\u53F7\u6216\u5168\u89D2\u6807\u70B9"
+      });
+      i++;
+      column++;
+    }
+    tokens.push({ type: "eof", value: "", line, column, start: i, end: i });
+    return { tokens, diagnostics };
+  }
+
+  // packages/core/src/kinds.ts
+  var NODE_KINDS = {
+    service: { color: "#4f46e5", label: "\u670D\u52A1" },
+    ui: { color: "#64748b", label: "\u754C\u9762" },
+    db: { color: "#10b981", label: "\u6570\u636E\u5E93" },
+    cache: { color: "#ef4444", label: "\u7F13\u5B58" },
+    idp: { color: "#f59e0b", label: "\u8EAB\u4EFD" },
+    acp: { color: "#0ea5e9", label: "\u6267\u884C\u9762 / ACP" },
+    model: { color: "#14b8a6", label: "\u6A21\u578B\u7F51\u5173" },
+    channel: { color: "#ec4899", label: "\u6E20\u9053" },
+    ext: { color: "#8b5cf6", label: "\u5916\u90E8\u670D\u52A1" }
+  };
+  var EDGE_KINDS = {
+    rest: { color: "#6366f1", label: "HTTP", dash: "" },
+    acp: { color: "#0ea5e9", label: "ACP", dash: "" },
+    sse: { color: "#0ea5e9", label: "SSE", dash: "7 4" },
+    sql: { color: "#10b981", label: "SQL", dash: "" },
+    rpc: { color: "#8b5cf6", label: "RPC", dash: "" },
+    oidc: { color: "#f59e0b", label: "OIDC", dash: "6 4" },
+    llm: { color: "#14b8a6", label: "LLM", dash: "" },
+    mcp: { color: "#64748b", label: "MCP", dash: "5 4" },
+    ws: { color: "#ec4899", label: "\u957F\u8FDE\u63A5", dash: "6 4" },
+    gate: { color: "#f43f5e", label: "\u51C6\u5165\u95F8\u95E8", dash: "2 4" },
+    opt: { color: "#94a3b8", label: "\u53EF\u9009", dash: "4 4" }
+  };
+  var DEFAULT_NODE_KIND = "service";
+  var FALLBACK_NODE_KIND = "ext";
+  var DEFAULT_EDGE_KIND = "rest";
+  var FALLBACK_EDGE_KIND = "opt";
+  function nodeKindStyle(kind) {
+    return NODE_KINDS[kind] ?? NODE_KINDS[FALLBACK_NODE_KIND];
+  }
+  function edgeKindStyle(kind) {
+    return EDGE_KINDS[kind] ?? EDGE_KINDS[FALLBACK_EDGE_KIND];
+  }
+
+  // packages/core/src/parser.ts
+  var NODE_ATTRS = /* @__PURE__ */ new Set(["group", "kind", "label", "tech", "at", "note", "src", "tags"]);
+  var EDGE_ATTRS = /* @__PURE__ */ new Set(["kind", "label", "via", "dash", "note", "src"]);
+  var GROUP_ATTRS = /* @__PURE__ */ new Set(["color", "label", "note", "src"]);
+  var DIAGRAM_ATTRS = /* @__PURE__ */ new Set(["title", "subtitle", "theme", "direction", "version"]);
+  var COLOR_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
+  var Parser = class {
+    tokens;
+    pos = 0;
+    diagnostics = [];
+    comments = [];
+    constructor(source, comments) {
+      const result = tokenize(source);
+      this.tokens = result.tokens;
+      this.diagnostics.push(...result.diagnostics);
+      this.comments.push(...comments);
+    }
+    peek(offset = 0) {
+      return this.tokens[Math.min(this.pos + offset, this.tokens.length - 1)];
+    }
+    next() {
+      const t = this.peek();
+      if (t.type !== "eof") this.pos++;
+      return t;
+    }
+    skipNewlines() {
+      while (this.peek().type === "newline" || this.peek().type === ";") this.next();
+    }
+    error(code, message, token, hint) {
+      const d = {
+        severity: "error",
+        code,
+        message,
+        line: token.line,
+        column: token.column
+      };
+      if (hint) d.hint = hint;
+      this.diagnostics.push(d);
+    }
+    warn(code, message, token, hint) {
+      const d = {
+        severity: "warning",
+        code,
+        message,
+        line: token.line,
+        column: token.column
+      };
+      if (hint) d.hint = hint;
+      this.diagnostics.push(d);
+    }
+    skipToLineEnd() {
+      while (this.peek().type !== "newline" && this.peek().type !== "eof") this.next();
+    }
+    parse() {
+      const document2 = {
+        type: "document",
+        version: "1.0",
+        diagram: null,
+        groups: [],
+        nodes: [],
+        edges: [],
+        comments: this.comments
+      };
+      const groupIds = /* @__PURE__ */ new Set();
+      const nodeIds = /* @__PURE__ */ new Set();
+      while (true) {
+        this.skipNewlines();
+        const token = this.peek();
+        if (token.type === "eof") break;
+        if (token.type !== "ident") {
+          this.error("BLK001", `\u671F\u671B\u4E00\u4E2A\u5757\uFF08diagram / group / node / edge\uFF09\uFF0C\u5B9E\u9645\u662F "${token.value || token.type}"`, token, "\u9876\u5C42\u53EA\u80FD\u662F\u8FD9\u56DB\u4E2A\u5173\u952E\u5B57\u4E4B\u4E00");
+          this.skipToLineEnd();
+          continue;
+        }
+        switch (token.value) {
+          case "diagram": {
+            this.next();
+            const title = this.peek().type === "string" ? this.next().value : null;
+            const props = this.parseBlock("diagram");
+            if (document2.diagram) {
+              this.warn("BLK004", "\u91CD\u590D\u7684 diagram \u5757\uFF0C\u53EA\u4FDD\u7559\u7B2C\u4E00\u4E2A", token);
+              break;
+            }
+            document2.diagram = this.buildDiagram(title, props, token);
+            break;
+          }
+          case "group": {
+            this.next();
+            const idToken = this.peek();
+            if (idToken.type !== "ident") {
+              this.error("BLK011", "group \u7F3A\u5C11 id", idToken, '\u5199\u6CD5\uFF1Agroup <id> "\u6807\u9898" { \u2026 }');
+              this.skipToLineEnd();
+              break;
+            }
+            this.next();
+            const title = this.peek().type === "string" ? this.next().value : null;
+            const props = this.parseBlock("group");
+            if (groupIds.has(idToken.value)) {
+              this.error("BLK004", `group id \u91CD\u590D\uFF1A${idToken.value}`, idToken, "\u540C\u4E00\u4E2A id \u53EA\u80FD\u58F0\u660E\u4E00\u6B21");
+              break;
+            }
+            groupIds.add(idToken.value);
+            document2.groups.push(this.buildGroup(idToken, title, props));
+            break;
+          }
+          case "node": {
+            this.next();
+            const idToken = this.peek();
+            if (idToken.type !== "ident") {
+              this.error("BLK011", "node \u7F3A\u5C11 id", idToken, '\u5199\u6CD5\uFF1Anode <id> "\u6807\u9898" { \u2026 }');
+              this.skipToLineEnd();
+              break;
+            }
+            this.next();
+            const title = this.peek().type === "string" ? this.next().value : null;
+            const props = this.parseBlock("node");
+            if (nodeIds.has(idToken.value)) {
+              this.error("BLK004", `node id \u91CD\u590D\uFF1A${idToken.value}`, idToken, "\u540C\u4E00\u4E2A id \u53EA\u80FD\u58F0\u660E\u4E00\u6B21");
+              break;
+            }
+            nodeIds.add(idToken.value);
+            document2.nodes.push(this.buildNode(idToken, title, props));
+            break;
+          }
+          case "edge": {
+            this.next();
+            const fromToken = this.peek();
+            if (fromToken.type !== "ident") {
+              this.error("BLK011", "edge \u7F3A\u5C11\u8D77\u70B9 id", fromToken, '\u5199\u6CD5\uFF1Aedge <from> -> <to> "\u6807\u7B7E" { \u2026 }');
+              this.skipToLineEnd();
+              break;
+            }
+            this.next();
+            if (this.peek().type !== "->") {
+              this.error("BLK001", 'edge \u7F3A\u5C11 "->"', this.peek(), "\u4E24\u4E2A\u8282\u70B9\u4E4B\u95F4\u7528 -> \u8FDE\u63A5");
+              this.skipToLineEnd();
+              break;
+            }
+            this.next();
+            const toToken = this.peek();
+            if (toToken.type !== "ident") {
+              this.error("BLK011", "edge \u7F3A\u5C11\u7EC8\u70B9 id", toToken, '\u5199\u6CD5\uFF1Aedge <from> -> <to> "\u6807\u7B7E" { \u2026 }');
+              this.skipToLineEnd();
+              break;
+            }
+            this.next();
+            const title = this.peek().type === "string" ? this.next().value : null;
+            const props = this.parseBlock("edge");
+            document2.edges.push(this.buildEdge(fromToken, toToken, title, props, document2.edges.length));
+            break;
+          }
+          default: {
+            this.error("BLK001", `\u672A\u77E5\u7684\u9876\u5C42\u5757 "${token.value}"`, token, "\u53EF\u7528\uFF1Adiagram / group / node / edge");
+            this.skipToLineEnd();
+          }
+        }
+      }
+      this.validate(document2);
+      return { document: document2, diagnostics: this.diagnostics };
+    }
+    parseBlock(kind) {
+      const props = /* @__PURE__ */ new Map();
+      this.skipNewlines();
+      if (this.peek().type !== "{") return props;
+      this.next();
+      while (true) {
+        this.skipNewlines();
+        const token = this.peek();
+        if (token.type === "}") {
+          this.next();
+          break;
+        }
+        if (token.type === "eof") {
+          this.error("BLK002", `\u5757\u6CA1\u6709\u95ED\u5408\uFF1A${kind}`, token, "\u8865\u4E0A }");
+          break;
+        }
+        if (token.type !== "ident") {
+          this.error("BLK001", `\u671F\u671B\u5C5E\u6027\u540D\uFF0C\u5B9E\u9645\u662F "${token.value || token.type}"`, token);
+          this.skipToLineEnd();
+          continue;
+        }
+        this.next();
+        const key = token.value;
+        if (this.peek().type !== ":") {
+          this.error("BLK001", `\u5C5E\u6027 "${key}" \u540E\u9762\u7F3A\u5C11\u5192\u53F7`, this.peek(), "\u5199\u6CD5\uFF1Akey: value");
+          this.skipToLineEnd();
+          continue;
+        }
+        this.next();
+        const value = this.parseValue();
+        if (!value) {
+          this.skipToLineEnd();
+          continue;
+        }
+        if (props.has(key)) {
+          this.warn("BLK005", `\u5C5E\u6027 "${key}" \u91CD\u590D\uFF0C\u4FDD\u7559\u6700\u540E\u4E00\u4E2A`, token);
+        }
+        props.set(key, value);
+        const after = this.peek();
+        if (after.type === "," || after.type === ";") {
+          this.next();
+          continue;
+        }
+        if (after.type !== "newline" && after.type !== "}" && after.type !== "eof") {
+          this.error("BLK001", `\u5C5E\u6027 "${key}" \u7684\u503C\u540E\u9762\u6709\u591A\u4F59\u5185\u5BB9`, after, "\u5C5E\u6027\u4E4B\u95F4\u7528\u6362\u884C\u3001\u5206\u53F7\u6216\u9017\u53F7\u5206\u9694");
+          this.skipToLineEnd();
+        }
+      }
+      return props;
+    }
+    parseValue() {
+      const token = this.peek();
+      if (token.type === "string") {
+        this.next();
+        return { type: "string", value: token.value, line: token.line };
+      }
+      if (token.type === "color") {
+        this.next();
+        return { type: "color", value: token.value, line: token.line };
+      }
+      if (token.type === "number") {
+        this.next();
+        const first = Number(token.value);
+        if (this.peek().type === ",") {
+          const save = this.pos;
+          this.next();
+          const second = this.peek();
+          if (second.type === "number") {
+            this.next();
+            return { type: "pair", value: [first, Number(second.value)], line: token.line };
+          }
+          this.pos = save;
+        }
+        return { type: "number", value: first, line: token.line };
+      }
+      if (token.type === "[") {
+        this.next();
+        const items = [];
+        while (true) {
+          this.skipInline();
+          if (this.peek().type === "]") {
+            this.next();
+            break;
+          }
+          if (this.peek().type === "eof" || this.peek().type === "newline") {
+            this.error("BLK006", "\u5217\u8868\u6CA1\u6709\u95ED\u5408", token, "\u8865\u4E0A ]");
+            break;
+          }
+          const item = this.parseValue();
+          if (!item) break;
+          items.push(item);
+          this.skipInline();
+          if (this.peek().type === ",") {
+            this.next();
+            continue;
+          }
+        }
+        return { type: "list", value: items, line: token.line };
+      }
+      if (token.type === "ident") {
+        this.next();
+        if (token.value === "true") return { type: "boolean", value: true, line: token.line };
+        if (token.value === "false") return { type: "boolean", value: false, line: token.line };
+        return { type: "ident", value: token.value, line: token.line };
+      }
+      this.error("BLK006", `\u65E0\u6CD5\u8BC6\u522B\u7684\u503C "${token.value || token.type}"`, token);
+      return null;
+    }
+    skipInline() {
+      while (this.peek().type === "newline") this.next();
+    }
+    collectExtra(props, allowed, block, anchor) {
+      const extra = {};
+      for (const [key, value] of props) {
+        if (allowed.has(key)) continue;
+        if (key.startsWith("x-")) {
+          extra[key] = toPlain(value);
+          continue;
+        }
+        this.warn(
+          "BLK005",
+          `${block} \u4E0D\u652F\u6301\u5C5E\u6027 "${key}"\uFF0C\u5DF2\u5FFD\u7565`,
+          { ...anchor, line: value.line, column: anchor.column },
+          `\u53EF\u7528\u5C5E\u6027\uFF1A${[...allowed].join(", ")}\uFF1B\u81EA\u5B9A\u4E49\u6269\u5C55\u8BF7\u52A0 x- \u524D\u7F00`
+        );
+      }
+      return extra;
+    }
+    buildDiagram(title, props, anchor) {
+      const extra = this.collectExtra(props, DIAGRAM_ATTRS, "diagram", anchor);
+      const themeRaw = asIdent(props.get("theme")) ?? "light";
+      const theme = themeRaw === "dark" || themeRaw === "auto" ? themeRaw : "light";
+      const directionRaw = (asIdent(props.get("direction")) ?? "TB").toUpperCase();
+      const direction = directionRaw === "LR" ? "LR" : "TB";
+      return {
+        type: "diagram",
+        title: asString(props.get("title")) ?? title,
+        subtitle: asString(props.get("subtitle")),
+        theme,
+        direction,
+        version: asString(props.get("version")) ?? "1.0",
+        line: anchor.line,
+        extra
+      };
+    }
+    buildGroup(anchor, title, props) {
+      const extra = this.collectExtra(props, GROUP_ATTRS, "group", anchor);
+      const color = asColor(props.get("color"));
+      if (props.has("color") && !color) {
+        this.error("BLK012", "group.color \u5FC5\u987B\u662F #rgb \u6216 #rrggbb", { ...anchor, line: props.get("color").line }, "\u4F8B\u5982 color: #4f46e5");
+      }
+      return {
+        type: "group",
+        id: anchor.value,
+        title: title ?? anchor.value,
+        label: asString(props.get("label")),
+        color,
+        note: asString(props.get("note")),
+        src: asString(props.get("src")),
+        line: anchor.line,
+        extra
+      };
+    }
+    buildNode(anchor, title, props) {
+      const extra = this.collectExtra(props, NODE_ATTRS, "node", anchor);
+      let kind = asIdent(props.get("kind")) ?? DEFAULT_NODE_KIND;
+      if (!NODE_KINDS[kind]) {
+        this.warn(
+          "BLK009",
+          `\u672A\u77E5\u7684 node kind "${kind}"\uFF0C\u6309 ${FALLBACK_NODE_KIND} \u6E32\u67D3`,
+          { ...anchor, line: props.get("kind")?.line ?? anchor.line },
+          `\u5185\u7F6E kind\uFF1A${Object.keys(NODE_KINDS).join(", ")}`
+        );
+        kind = FALLBACK_NODE_KIND;
+      }
+      const at = asPair(props.get("at"));
+      if (props.has("at") && !at) {
+        this.error("BLK006", "node.at \u5FC5\u987B\u662F x, y \u4E24\u4E2A\u6570\u5B57", { ...anchor, line: props.get("at").line }, "\u4F8B\u5982 at: 340, 280");
+      }
+      return {
+        type: "node",
+        id: anchor.value,
+        title: title ?? anchor.value,
+        label: asString(props.get("label")),
+        group: asIdent(props.get("group")),
+        kind,
+        tech: asString(props.get("tech")),
+        at,
+        note: asString(props.get("note")),
+        src: asString(props.get("src")),
+        tags: asStringList(props.get("tags")),
+        line: anchor.line,
+        extra
+      };
+    }
+    buildEdge(from, to, title, props, index) {
+      const extra = this.collectExtra(props, EDGE_ATTRS, "edge", from);
+      let kind = asIdent(props.get("kind")) ?? DEFAULT_EDGE_KIND;
+      if (!EDGE_KINDS[kind]) {
+        this.warn(
+          "BLK009",
+          `\u672A\u77E5\u7684 edge kind "${kind}"\uFF0C\u6309 ${FALLBACK_EDGE_KIND} \u6E32\u67D3`,
+          { ...from, line: props.get("kind")?.line ?? from.line },
+          `\u5185\u7F6E kind\uFF1A${Object.keys(EDGE_KINDS).join(", ")}`
+        );
+        kind = FALLBACK_EDGE_KIND;
+      }
+      const via = asPair(props.get("via"));
+      if (props.has("via") && !via) {
+        this.error("BLK006", "edge.via \u5FC5\u987B\u662F dx, dy \u4E24\u4E2A\u6570\u5B57", { ...from, line: props.get("via").line }, "\u4F8B\u5982 via: -30, 0");
+      }
+      const dash = asBool(props.get("dash"));
+      return {
+        type: "edge",
+        id: `e${index + 1}`,
+        from: from.value,
+        to: to.value,
+        title: title ?? "",
+        label: asString(props.get("label")) ?? title,
+        kind,
+        via,
+        dash,
+        note: asString(props.get("note")),
+        src: asString(props.get("src")),
+        line: from.line,
+        extra
+      };
+    }
+    validate(document2) {
+      const groupIds = new Set(document2.groups.map((g) => g.id));
+      const nodeIds = new Set(document2.nodes.map((n) => n.id));
+      for (const node of document2.nodes) {
+        if (node.group && !groupIds.has(node.group)) {
+          this.diagnostics.push({
+            severity: "error",
+            code: "BLK008",
+            message: `node "${node.id}" \u5F15\u7528\u4E86\u672A\u58F0\u660E\u7684 group "${node.group}"`,
+            line: node.line,
+            column: 1,
+            hint: `\u5148\u58F0\u660E group ${node.group} "\u2026" { \u2026 }\uFF0C\u6216\u53BB\u6389\u8FD9\u6761\u5F15\u7528`
+          });
+          node.group = null;
+        }
+      }
+      for (const edge of document2.edges) {
+        if (!nodeIds.has(edge.from)) {
+          this.diagnostics.push({
+            severity: "error",
+            code: "BLK007",
+            message: `edge \u8D77\u70B9 "${edge.from}" \u4E0D\u5B58\u5728`,
+            line: edge.line,
+            column: 1,
+            hint: "\u68C0\u67E5 node id \u62FC\u5199\uFF0C\u6216\u5148\u58F0\u660E\u8BE5\u8282\u70B9"
+          });
+        }
+        if (!nodeIds.has(edge.to)) {
+          this.diagnostics.push({
+            severity: "error",
+            code: "BLK007",
+            message: `edge \u7EC8\u70B9 "${edge.to}" \u4E0D\u5B58\u5728`,
+            line: edge.line,
+            column: 1,
+            hint: "\u68C0\u67E5 node id \u62FC\u5199\uFF0C\u6216\u5148\u58F0\u660E\u8BE5\u8282\u70B9"
+          });
+        }
+      }
+      const version = document2.diagram?.version ?? "1.0";
+      const major = Number(version.split(".")[0]);
+      if (!Number.isFinite(major) || major > 1) {
+        this.diagnostics.push({
+          severity: "warning",
+          code: "BLK010",
+          message: `\u6587\u4EF6\u58F0\u660E version "${version}"\uFF0C\u5F53\u524D\u5B9E\u73B0\u652F\u6301 1.x\uFF0C\u5DF2\u6309 1.0 \u89E3\u6790`,
+          line: document2.diagram?.line ?? 1,
+          column: 1
+        });
+      }
+      document2.version = version;
+    }
+  };
+  function toPlain(value) {
+    if (value.type === "list") return value.value.map(toPlain);
+    if (value.type === "pair") return [value.value[0], value.value[1]];
+    return value.value;
+  }
+  function asString(value) {
+    if (!value) return null;
+    if (value.type === "string" || value.type === "ident" || value.type === "color") return value.value;
+    if (value.type === "number") return String(value.value);
+    if (value.type === "boolean") return String(value.value);
+    return null;
+  }
+  function asIdent(value) {
+    if (!value) return null;
+    if (value.type === "ident" || value.type === "string") return value.value;
+    return null;
+  }
+  function asColor(value) {
+    if (!value) return null;
+    if (value.type === "color" && COLOR_RE.test(value.value)) return value.value;
+    if (value.type === "string" && COLOR_RE.test(value.value)) return value.value;
+    return null;
+  }
+  function asPair(value) {
+    if (!value || value.type !== "pair") return null;
+    return { x: value.value[0], y: value.value[1] };
+  }
+  function asBool(value) {
+    if (!value) return null;
+    return value.type === "boolean" ? value.value : null;
+  }
+  function asStringList(value) {
+    if (!value || value.type !== "list") return [];
+    return value.value.map((item) => item.type === "string" || item.type === "ident" ? item.value : null).filter((item) => item !== null);
+  }
+  function collectComments(source) {
+    const comments = [];
+    source.split("\n").forEach((raw, index) => {
+      const trimmed = raw.trim();
+      if (!trimmed) return;
+      if (trimmed.startsWith("//")) {
+        comments.push({ line: index + 1, text: trimmed });
+        return;
+      }
+      if (trimmed.startsWith("#") && !/^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?(\s|$)/.test(trimmed)) {
+        comments.push({ line: index + 1, text: trimmed });
+      }
+    });
+    return comments;
+  }
+  function parse(source) {
+    const parser = new Parser(source, collectComments(source));
+    return parser.parse();
+  }
+
+  // packages/core/src/patch.ts
+  function formatPoint(p) {
+    const fmt = (n) => Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
+    return `${fmt(p.x)}, ${fmt(p.y)}`;
+  }
+  function findCloseLine(lines, openIndex) {
+    let depth = 0;
+    let inTriple = false;
+    for (let i = openIndex; i < lines.length; i++) {
+      const line = lines[i] ?? "";
+      let inString = false;
+      let j = 0;
+      while (j < line.length) {
+        if (inTriple) {
+          if (line.startsWith('"""', j)) {
+            inTriple = false;
+            j += 3;
+            continue;
+          }
+          j++;
+          continue;
+        }
+        if (!inString && line.startsWith('"""', j)) {
+          inTriple = true;
+          j += 3;
+          continue;
+        }
+        const ch = line[j];
+        if (ch === '"') {
+          if (!inString) inString = true;
+          else if (line[j - 1] !== "\\") inString = false;
+          j++;
+          continue;
+        }
+        if (inString) {
+          j++;
+          continue;
+        }
+        if (ch === "#" || ch === "/" && line[j + 1] === "/") break;
+        if (ch === "{") depth++;
+        if (ch === "}") depth--;
+        j++;
+      }
+      if (depth <= 0 && i >= openIndex) return i;
+    }
+    return null;
+  }
+  function findBlock(lines, headLine) {
+    const headIndex = headLine - 1;
+    const head = lines[headIndex] ?? "";
+    const openIndex = head.includes("{") ? headIndex : null;
+    if (openIndex === null) {
+      return { headIndex, openIndex: null, closeIndex: null, indent: "  " };
+    }
+    const closeIndex = findCloseLine(lines, openIndex);
+    let indent = "  ";
+    if (closeIndex !== null) {
+      for (let i = openIndex + 1; i < closeIndex; i++) {
+        const match = /^(\s+)\S/.exec(lines[i] ?? "");
+        if (match) {
+          indent = match[1];
+          break;
+        }
+      }
+    }
+    return { headIndex, openIndex, closeIndex, indent };
+  }
+  function replaceOrInsert(lines, headLine, key, value) {
+    const range = findBlock(lines, headLine);
+    const keyRe = new RegExp(`^(\\s*)${key}\\s*:`);
+    if (range.closeIndex !== null) {
+      for (let i = range.openIndex + 1; i < range.closeIndex; i++) {
+        const match = keyRe.exec(lines[i] ?? "");
+        if (match) {
+          lines[i] = `${match[1]}${key}: ${value}`;
+          return;
+        }
+      }
+      lines.splice(range.openIndex + 1, 0, `${range.indent}${key}: ${value}`);
+      return;
+    }
+    const head = (lines[range.headIndex] ?? "").replace(/\s+$/, "");
+    lines[range.headIndex] = `${head} {`;
+    lines.splice(range.headIndex + 1, 0, `  ${key}: ${value}`, "}");
+  }
+  function applyLayout(source, document2, patch) {
+    const lines = source.split("\n");
+    const byId = new Map(document2.nodes.map((n) => [n.id, n]));
+    const edgeById = new Map(document2.edges.map((e) => [e.id, e]));
+    const jobs = [];
+    for (const [id, point] of patch.nodes ?? []) {
+      const decl = byId.get(id);
+      if (decl) jobs.push({ line: decl.line, key: "at", value: formatPoint(point) });
+    }
+    for (const [id, point] of patch.edges ?? []) {
+      const decl = edgeById.get(id);
+      if (decl) jobs.push({ line: decl.line, key: "via", value: formatPoint(point) });
+    }
+    jobs.sort((a, b) => b.line - a.line);
+    for (const job of jobs) replaceOrInsert(lines, job.line, job.key, job.value);
+    return lines.join("\n");
+  }
+
+  // packages/core/src/geometry.ts
+  var DEFAULT_BOX = { width: 200, height: 62 };
+  var GROUP_PAD = 30;
+  var GROUP_HEAD = 34;
+  var PAIR_SPREAD = 54;
+  function boxOf(node, options = DEFAULT_BOX) {
+    const x = node.at?.x ?? 0;
+    const y = node.at?.y ?? 0;
+    return { x, y, w: options.width, h: options.height, cx: x + options.width / 2, cy: y + options.height / 2 };
+  }
+  function anchorPoint(node, towards, options = DEFAULT_BOX) {
+    const box = boxOf(node, options);
+    const dx = towards.x - box.cx;
+    const dy = towards.y - box.cy;
+    if (dx === 0 && dy === 0) return { x: box.cx, y: box.cy };
+    const sx = box.w / 2 / Math.abs(dx || 1e-9);
+    const sy = box.h / 2 / Math.abs(dy || 1e-9);
+    const s = Math.min(sx, sy);
+    return { x: box.cx + dx * s, y: box.cy + dy * s };
+  }
+  function bezierAt(p1, c, p2, t) {
+    const mt = 1 - t;
+    return {
+      x: mt * mt * p1.x + 2 * mt * t * c.x + t * t * p2.x,
+      y: mt * mt * p1.y + 2 * mt * t * c.y + t * t * p2.y
+    };
+  }
+  function pairKey(a, b) {
+    return [a, b].sort().join("\0");
+  }
+  function indexPairs(document2) {
+    const map = /* @__PURE__ */ new Map();
+    for (const edge of document2.edges) {
+      const key = pairKey(edge.from, edge.to);
+      const list = map.get(key);
+      if (list) list.push(edge);
+      else map.set(key, [edge]);
+    }
+    return map;
+  }
+  function edgeGeometry(edge, ctx) {
+    const options = ctx.box ?? DEFAULT_BOX;
+    const from = ctx.byId.get(edge.from);
+    const to = ctx.byId.get(edge.to);
+    if (!from || !to) return null;
+    const fromBox = boxOf(from, options);
+    const toBox = boxOf(to, options);
+    const p1 = anchorPoint(from, { x: toBox.cx, y: toBox.cy }, options);
+    const p2 = anchorPoint(to, { x: fromBox.cx, y: fromBox.cy }, options);
+    const mx = (p1.x + p2.x) / 2;
+    const my = (p1.y + p2.y) / 2;
+    const vx = p2.x - p1.x;
+    const vy = p2.y - p1.y;
+    const len = Math.hypot(vx, vy) || 1;
+    const px = -vy / len;
+    const py = vx / len;
+    const siblings = ctx.pairs.get(pairKey(edge.from, edge.to)) ?? [edge];
+    const index = Math.max(0, siblings.indexOf(edge));
+    const count = siblings.length;
+    const reversed = edge.from > edge.to;
+    const spread = count > 1 ? (index - (count - 1) / 2) * PAIR_SPREAD * (reversed ? -1 : 1) : 0;
+    const via = edge.via ?? { x: 0, y: 0 };
+    const control = {
+      x: mx + via.x + px * spread,
+      y: my + via.y + py * spread
+    };
+    return {
+      p1,
+      p2,
+      control,
+      mid: bezierAt(p1, control, p2, 0.5),
+      offset: spread
+    };
+  }
+  function groupBoundingBox(nodes, options = DEFAULT_BOX) {
+    if (!nodes.length) return null;
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const node of nodes) {
+      const box = boxOf(node, options);
+      x0 = Math.min(x0, box.x);
+      y0 = Math.min(y0, box.y);
+      x1 = Math.max(x1, box.x + box.w);
+      y1 = Math.max(y1, box.y + box.h);
+    }
+    return {
+      x: x0 - GROUP_PAD,
+      y: y0 - GROUP_PAD - GROUP_HEAD,
+      w: x1 - x0 + GROUP_PAD * 2,
+      h: y1 - y0 + GROUP_PAD * 2 + GROUP_HEAD
+    };
+  }
+  function contentBounds(document2, options = DEFAULT_BOX) {
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const group of document2.groups) {
+      const members = document2.nodes.filter((n) => n.group === group.id);
+      const box = groupBoundingBox(members, options);
+      if (!box) continue;
+      x0 = Math.min(x0, box.x);
+      y0 = Math.min(y0, box.y);
+      x1 = Math.max(x1, box.x + box.w);
+      y1 = Math.max(y1, box.y + box.h);
+    }
+    for (const node of document2.nodes) {
+      const box = boxOf(node, options);
+      x0 = Math.min(x0, box.x);
+      y0 = Math.min(y0, box.y);
+      x1 = Math.max(x1, box.x + box.w);
+      y1 = Math.max(y1, box.y + box.h);
+    }
+    if (!Number.isFinite(x0)) return { x: 0, y: 0, w: 800, h: 600 };
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+  function autoLayout(document2, options = DEFAULT_BOX) {
+    const width = options.width ?? DEFAULT_BOX.width;
+    const height = options.height ?? DEFAULT_BOX.height;
+    const gapX = options.columnGap ?? 70;
+    const rowHeight = options.rowHeight ?? height + 110;
+    const origin = options.origin ?? { x: 80, y: 80 };
+    const perRow = options.perRow ?? Math.max(3, Math.ceil(Math.sqrt(Math.max(1, document2.nodes.length))));
+    const result = /* @__PURE__ */ new Map();
+    let index = 0;
+    for (const node of document2.nodes) {
+      if (node.at) {
+        result.set(node.id, node.at);
+        index++;
+        continue;
+      }
+      const col = index % perRow;
+      const row = Math.floor(index / perRow);
+      result.set(node.id, { x: origin.x + col * (width + gapX), y: origin.y + row * rowHeight });
+      index++;
+    }
+    return result;
+  }
+  function pathOf(geo) {
+    const f = (n) => Number(n.toFixed(2));
+    return `M ${f(geo.p1.x)} ${f(geo.p1.y)} Q ${f(geo.control.x)} ${f(geo.control.y)} ${f(geo.p2.x)} ${f(geo.p2.y)}`;
+  }
+
+  // packages/core/src/layout.ts
+  var DEFAULTS = {
+    ...DEFAULT_BOX,
+    origin: { x: 80, y: 80 },
+    gapX: 110,
+    gapY: 56,
+    groupGap: 74
+  };
+  function resolve(options) {
+    return {
+      width: options?.width ?? DEFAULTS.width,
+      height: options?.height ?? DEFAULTS.height,
+      origin: options?.origin ?? DEFAULTS.origin,
+      gapX: options?.gapX ?? DEFAULTS.gapX,
+      gapY: options?.gapY ?? DEFAULTS.gapY,
+      groupGap: options?.groupGap ?? DEFAULTS.groupGap
+    };
+  }
+  function buildGraph(document2) {
+    const outgoing = /* @__PURE__ */ new Map();
+    const incoming = /* @__PURE__ */ new Map();
+    const degree = /* @__PURE__ */ new Map();
+    const order = /* @__PURE__ */ new Map();
+    document2.nodes.forEach((node, index) => {
+      outgoing.set(node.id, []);
+      incoming.set(node.id, []);
+      degree.set(node.id, 0);
+      order.set(node.id, index);
+    });
+    for (const edge of document2.edges) {
+      if (!outgoing.has(edge.from) || !outgoing.has(edge.to)) continue;
+      outgoing.get(edge.from).push(edge.to);
+      incoming.get(edge.to).push(edge.from);
+      degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1);
+      degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1);
+    }
+    return { nodes: document2.nodes, outgoing, incoming, degree, order };
+  }
+  function depths(graph) {
+    const depth = /* @__PURE__ */ new Map();
+    for (const node of graph.nodes) depth.set(node.id, 0);
+    const limit = graph.nodes.length;
+    for (let round = 0; round < limit; round++) {
+      let changed = false;
+      for (const node of graph.nodes) {
+        const d = depth.get(node.id);
+        for (const next of graph.outgoing.get(node.id) ?? []) {
+          if (depth.get(next) < d + 1) {
+            depth.set(next, d + 1);
+            changed = true;
+          }
+        }
+      }
+      if (!changed) break;
+    }
+    const maxDepth = Math.max(0, limit - 1);
+    for (const [id, d] of depth) depth.set(id, Math.min(d, maxDepth));
+    return depth;
+  }
+  function sortByGroup(nodes, document2, index) {
+    const groupOrder = new Map(document2.groups.map((g, i) => [g.id, i]));
+    return [...nodes].sort((a, b) => {
+      const ga = a.group ? groupOrder.get(a.group) ?? 999 : 999;
+      const gb = b.group ? groupOrder.get(b.group) ?? 999 : 999;
+      if (ga !== gb) return ga - gb;
+      return (index.get(a.id) ?? 0) - (index.get(b.id) ?? 0);
+    });
+  }
+  function roundPoint(p) {
+    return { x: Math.round(p.x), y: Math.round(p.y) };
+  }
+  function layered(document2, options) {
+    const graph = buildGraph(document2);
+    const nodeDepth = depths(graph);
+    const groupDepth = /* @__PURE__ */ new Map();
+    const groupOrder = new Map(document2.groups.map((g, i) => [g.id, i]));
+    for (const node of document2.nodes) {
+      if (!node.group) continue;
+      const d = nodeDepth.get(node.id) ?? 0;
+      const current = groupDepth.get(node.group);
+      groupDepth.set(node.group, current === void 0 ? d : Math.min(current, d));
+    }
+    const columns = /* @__PURE__ */ new Map();
+    for (const node of document2.nodes) {
+      const key = node.group ? `g:${node.group}` : `d:${nodeDepth.get(node.id) ?? 0}`;
+      const depth = node.group ? groupDepth.get(node.group) ?? 0 : nodeDepth.get(node.id) ?? 0;
+      const order = node.group ? groupOrder.get(node.group) ?? 999 : 999;
+      let column = columns.get(key);
+      if (!column) {
+        column = { key, depth, order, nodes: [] };
+        columns.set(key, column);
+      }
+      column.nodes.push(node);
+    }
+    const ordered = [...columns.values()].sort((a, b) => {
+      if (a.depth !== b.depth) return a.depth - b.depth;
+      return a.order - b.order;
+    });
+    const result = /* @__PURE__ */ new Map();
+    ordered.forEach((column, columnIndex) => {
+      const x = options.origin.x + columnIndex * (options.width + options.gapX);
+      const nodes = [...column.nodes].sort(
+        (a, b) => (graph.order.get(a.id) ?? 0) - (graph.order.get(b.id) ?? 0)
+      );
+      let y = options.origin.y;
+      for (const node of nodes) {
+        result.set(node.id, roundPoint({ x, y }));
+        y += options.height + options.gapY;
+      }
+    });
+    return result;
+  }
+  function pipeline(document2, options) {
+    const buckets = document2.groups.map(() => []);
+    const loose = [];
+    const index = new Map(document2.groups.map((g, i) => [g.id, i]));
+    for (const node of document2.nodes) {
+      const at = node.group ? index.get(node.group) : void 0;
+      if (at === void 0) loose.push(node);
+      else buckets[at].push(node);
+    }
+    if (loose.length) buckets.push(loose);
+    const result = /* @__PURE__ */ new Map();
+    buckets.forEach((nodes, columnIndex) => {
+      const x = options.origin.x + columnIndex * (options.width + options.gapX);
+      nodes.forEach((node, rowIndex) => {
+        result.set(node.id, roundPoint({
+          x,
+          y: options.origin.y + rowIndex * (options.height + options.gapY)
+        }));
+      });
+    });
+    return result;
+  }
+  function snowflake(document2, options) {
+    const graph = buildGraph(document2);
+    if (!graph.nodes.length) return /* @__PURE__ */ new Map();
+    const sorted = [...graph.nodes].sort((a, b) => {
+      const diff = (graph.degree.get(b.id) ?? 0) - (graph.degree.get(a.id) ?? 0);
+      return diff !== 0 ? diff : a.id.localeCompare(b.id);
+    });
+    const center = sorted[0];
+    const rest = sortByGroup(sorted.slice(1), document2, graph.order);
+    const stepX = options.width + options.gapX;
+    const stepY = options.height + options.gapY;
+    const baseRadius = Math.max(stepX, stepY) * 0.9;
+    const result = /* @__PURE__ */ new Map();
+    result.set(center.id, roundPoint({ x: options.origin.x, y: options.origin.y }));
+    let cursor = 0;
+    let ring = 1;
+    while (cursor < rest.length) {
+      const capacity = 6 * ring;
+      const slice = rest.slice(cursor, cursor + capacity);
+      const radius = baseRadius * ring;
+      slice.forEach((node, i) => {
+        const angle = Math.PI * 2 * i / slice.length - Math.PI / 2;
+        result.set(node.id, roundPoint({
+          x: options.origin.x + Math.cos(angle) * radius,
+          y: options.origin.y + Math.sin(angle) * radius
+        }));
+      });
+      cursor += slice.length;
+      ring++;
+    }
+    let minX = Infinity;
+    let minY = Infinity;
+    for (const p of result.values()) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+    }
+    const dx = options.origin.x - minX;
+    const dy = options.origin.y - minY;
+    for (const [id, p] of result) result.set(id, roundPoint({ x: p.x + dx, y: p.y + dy }));
+    return result;
+  }
+  function compact(document2, options) {
+    const graph = buildGraph(document2);
+    const sorted = [...graph.nodes].sort((a, b) => {
+      const diff = (graph.degree.get(b.id) ?? 0) - (graph.degree.get(a.id) ?? 0);
+      return diff !== 0 ? diff : a.id.localeCompare(b.id);
+    });
+    const columns = Math.max(1, Math.ceil(Math.sqrt(sorted.length)));
+    const result = /* @__PURE__ */ new Map();
+    sorted.forEach((node, i) => {
+      result.set(node.id, roundPoint({
+        x: options.origin.x + i % columns * (options.width + options.gapX),
+        y: options.origin.y + Math.floor(i / columns) * (options.height + options.gapY)
+      }));
+    });
+    return result;
+  }
+  function layoutDocument(document2, algorithm, options) {
+    const resolved = resolve(options);
+    switch (algorithm) {
+      case "pipeline":
+        return pipeline(document2, resolved);
+      case "snowflake":
+        return snowflake(document2, resolved);
+      case "compact":
+        return compact(document2, resolved);
+      case "layered":
+      default:
+        return layered(document2, resolved);
+    }
+  }
+  function relatedEdges(document2, id) {
+    const set = /* @__PURE__ */ new Set();
+    if (!id) return set;
+    for (const edge of document2.edges) {
+      if (edge.from === id || edge.to === id) set.add(edge.id);
+    }
+    return set;
+  }
+  function relatedNodes(document2, id) {
+    const set = /* @__PURE__ */ new Set();
+    if (!id) return set;
+    set.add(id);
+    for (const edge of document2.edges) {
+      if (edge.from === id) set.add(edge.to);
+      if (edge.to === id) set.add(edge.from);
+    }
+    return set;
+  }
+
+  // packages/viewer/src/styles.ts
+  var VIEWER_CSS = `
+.bml-root{
+  --bml-bg:#f7f8fa;
+  --bml-panel:#ffffff;
+  --bml-ink:#0f172a;
+  --bml-ink-2:#475569;
+  --bml-ink-3:#94a3b8;
+  --bml-line:#e2e8f0;
+  --bml-accent:#4f46e5;
+  --bml-grid:#dfe5ec;
+  --bml-label-bg:#f7f8fa;
+  position:relative;
+  display:flex;
+  flex-direction:column;
+  height:100%;
+  min-height:0;
+  background:var(--bml-bg);
+  color:var(--bml-ink);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.bml-root[data-bml-theme="dark"]{
+  --bml-bg:#0b1220;
+  --bml-panel:#0f172a;
+  --bml-ink:#e2e8f0;
+  --bml-ink-2:#94a3b8;
+  --bml-ink-3:#64748b;
+  --bml-line:#1e293b;
+  --bml-grid:#1b2637;
+  --bml-label-bg:#0b1220;
+}
+.bml-svg{flex:1;width:100%;height:100%;display:block;touch-action:none;cursor:default}
+.bml-root.bml-readonly .bml-node{cursor:default}
+.bml-grid-dot{fill:var(--bml-grid)}
+.bml-group-box{fill-opacity:.06;stroke-opacity:.3;stroke-width:1.2}
+.bml-group-label{font:600 10.5px/1 inherit;letter-spacing:.06em;text-transform:uppercase}
+.bml-node{cursor:grab}
+.bml-node.bml-dragging{cursor:grabbing}
+.bml-node-box{fill:var(--bml-panel);stroke:#dbe2ea;stroke-width:1.2;filter:url(#bml-node-shadow)}
+.bml-root[data-bml-theme="dark"] .bml-node-box{stroke:#243146}
+.bml-node:hover .bml-node-box{stroke:#b9c4d2}
+.bml-node.bml-selected .bml-node-box{stroke:var(--bml-accent);stroke-width:2;filter:url(#bml-node-shadow-sel)}
+.bml-node-title{font:600 13px/1 inherit;fill:var(--bml-ink);pointer-events:none}
+.bml-node-tech{font:400 10.5px/1 inherit;fill:#7c8999;pointer-events:none}
+.bml-edge{transition:opacity .12s ease}
+.bml-focusing .bml-edge{opacity:.14}
+.bml-focusing .bml-edge.bml-related{opacity:1}
+.bml-focusing .bml-edge.bml-related .bml-edge-line{stroke-width:2.3}
+.bml-focusing .bml-edge.bml-related .bml-edge-label{fill:var(--bml-ink);font-weight:600}
+.bml-node{transition:opacity .12s ease}
+.bml-focusing .bml-node:not(.bml-focus-node){opacity:.55}
+.bml-edge-line{fill:none;stroke-width:1.6;pointer-events:none}
+.bml-edge-hit{fill:none;stroke:transparent;stroke-width:16;cursor:pointer}
+.bml-edge-label{font:500 10.5px/1 inherit;fill:#5c6b7f;pointer-events:none}
+.bml-root[data-bml-theme="dark"] .bml-edge-label{fill:#93a3b8}
+.bml-edge-label-bg{fill:var(--bml-label-bg);pointer-events:none}
+.bml-edge.bml-selected .bml-edge-line{stroke-width:2.6}
+.bml-edge.bml-selected{opacity:1}
+.bml-edge.bml-selected .bml-edge-label{fill:var(--bml-ink);font-weight:600}
+.bml-label-group{pointer-events:auto;cursor:pointer}
+.bml-bend-handle{fill:var(--bml-panel);stroke:var(--bml-accent);stroke-width:2;cursor:move}
+.bml-bend-line{stroke:var(--bml-accent);stroke-width:1;stroke-dasharray:3 3;fill:none;opacity:.5}
+.bml-legend{
+  position:absolute;left:14px;bottom:14px;display:flex;flex-wrap:wrap;gap:6px 12px;
+  max-width:min(560px,60%);padding:9px 11px;font-size:11px;color:var(--bml-ink-2);
+  background:color-mix(in srgb,var(--bml-panel) 92%,transparent);
+  border:1px solid var(--bml-line);border-radius:10px;
+  box-shadow:0 4px 16px rgba(15,23,42,.06);backdrop-filter:blur(6px);
+}
+.bml-legend b{font-weight:600;color:var(--bml-ink);font-size:10.5px;margin-right:2px}
+.bml-legend .bml-item{display:inline-flex;align-items:center;gap:5px}
+.bml-legend .bml-swatch{width:10px;height:10px;border-radius:3px;flex:0 0 auto}
+.bml-hint{
+  position:absolute;right:14px;bottom:14px;padding:6px 10px;font-size:11px;color:var(--bml-ink-3);
+  background:color-mix(in srgb,var(--bml-panel) 90%,transparent);
+  border:1px solid var(--bml-line);border-radius:8px;box-shadow:0 2px 10px rgba(15,23,42,.05);
+}
+.bml-hint kbd{
+  font:500 10px/1 ui-monospace,monospace;background:var(--bml-bg);border:1px solid var(--bml-line);
+  border-bottom-width:2px;border-radius:4px;padding:2px 4px;color:var(--bml-ink-2);
+}
+.bml-inspector{
+  position:absolute;top:0;right:0;bottom:0;width:340px;display:flex;flex-direction:column;
+  background:var(--bml-panel);border-left:1px solid var(--bml-line);
+  box-shadow:-8px 0 24px rgba(15,23,42,.06);
+  transform:translateX(100%);transition:transform .16s ease;z-index:5;
+}
+.bml-inspector.bml-open{transform:translateX(0)}
+.bml-inspector-head{display:flex;align-items:flex-start;gap:8px;padding:14px 14px 10px;border-bottom:1px solid var(--bml-line)}
+.bml-kind-dot{width:8px;height:8px;border-radius:3px;margin-top:5px;flex:0 0 auto}
+.bml-inspector-head h2{margin:0;font-size:14px;font-weight:650;line-height:1.3;word-break:break-all;color:var(--bml-ink)}
+.bml-inspector-meta{font-size:11.5px;color:var(--bml-ink-3);margin-top:3px;font-family:ui-monospace,monospace}
+.bml-close{margin-left:auto;border:none;background:transparent;color:var(--bml-ink-3);cursor:pointer;font-size:16px;line-height:1;padding:2px 4px;border-radius:4px}
+.bml-close:hover{background:var(--bml-bg);color:var(--bml-ink)}
+.bml-inspector-body{padding:12px 14px 24px;overflow:auto;flex:1;font-size:12.5px;line-height:1.6;color:var(--bml-ink-2)}
+.bml-inspector-body h3{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--bml-ink-3);margin:16px 0 6px;font-weight:600}
+.bml-inspector-body h3:first-child{margin-top:0}
+.bml-inspector-body p{margin:0 0 8px;white-space:pre-wrap}
+.bml-inspector-body code{font-family:ui-monospace,monospace;font-size:11px;background:var(--bml-bg);padding:1px 5px;border-radius:4px;color:var(--bml-ink-2);word-break:break-all}
+.bml-edge-item{display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px dashed var(--bml-line)}
+.bml-edge-item:last-child{border-bottom:none}
+.bml-edge-item .bml-arrow{font-family:ui-monospace,monospace;color:var(--bml-ink-3);font-size:11px;padding-top:1px}
+.bml-edge-item .bml-t{font-size:12px;color:var(--bml-ink)}
+.bml-edge-item .bml-l{font-size:11px;color:var(--bml-ink-3);font-family:ui-monospace,monospace;word-break:break-all}
+.bml-error{
+  position:absolute;left:14px;top:14px;max-width:min(560px,70%);padding:10px 12px;
+  background:#fef2f2;border:1px solid #fecaca;border-radius:10px;color:#991b1b;
+  font-size:11.5px;line-height:1.55;z-index:6;box-shadow:0 8px 24px rgba(153,27,27,.12);
+}
+.bml-error b{font-weight:650}
+.bml-error code{font-family:ui-monospace,monospace;font-size:10.5px;background:#fee2e2;padding:0 4px;border-radius:3px}
+`;
+
+  // packages/viewer/src/viewer.ts
+  var SVGNS = "http://www.w3.org/2000/svg";
+  var stylesInjected = false;
+  function injectStyles() {
+    if (stylesInjected) return;
+    if (typeof document === "undefined") return;
+    const style = document.createElement("style");
+    style.setAttribute("data-blockml", "");
+    style.textContent = VIEWER_CSS;
+    document.head.appendChild(style);
+    stylesInjected = true;
+  }
+  function el(tag, attrs, parent) {
+    const node = document.createElementNS(SVGNS, tag);
+    if (attrs) {
+      for (const [key, value] of Object.entries(attrs)) {
+        if (value !== void 0) node.setAttribute(key, String(value));
+      }
+    }
+    if (parent) parent.appendChild(node);
+    return node;
+  }
+  var measureCanvas = typeof document !== "undefined" ? document.createElement("canvas") : null;
+  var measureCtx = measureCanvas?.getContext("2d") ?? null;
+  var measureCache = /* @__PURE__ */ new Map();
+  function textWidth(text, font) {
+    const key = `${font}\0${text}`;
+    const hit = measureCache.get(key);
+    if (hit !== void 0) return hit;
+    let width = text.length * 7;
+    if (measureCtx) {
+      measureCtx.font = font;
+      width = measureCtx.measureText(text).width;
+    }
+    if (measureCache.size > 4e3) measureCache.clear();
+    measureCache.set(key, width);
+    return width;
+  }
+  function truncate(text, font, maxWidth) {
+    if (textWidth(text, font) <= maxWidth) return text;
+    let lo = 0;
+    let hi = text.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (textWidth(text.slice(0, mid) + "\u2026", font) <= maxWidth) lo = mid;
+      else hi = mid - 1;
+    }
+    return text.slice(0, lo) + "\u2026";
+  }
+  function rectsHit(a, b, pad) {
+    return !(a.x + a.w + pad < b.x || b.x + b.w + pad < a.x || a.y + a.h + pad < b.y || b.y + b.h + pad < a.y);
+  }
+  var Viewer = class {
+    root;
+    svg;
+    viewport;
+    groupLayer;
+    edgeLayer;
+    nodeLayer;
+    labelLayer;
+    overlayLayer;
+    defs;
+    legend;
+    inspector;
+    errorBox;
+    options;
+    source;
+    doc = null;
+    diagnostics = [];
+    view = { x: 40, y: 20, k: 1 };
+    selectedNode = null;
+    selectedEdge = null;
+    hoveredNode = null;
+    nodeEls = /* @__PURE__ */ new Map();
+    edgeEls = /* @__PURE__ */ new Map();
+    groupEls = /* @__PURE__ */ new Map();
+    placedLabels = [];
+    fitted = false;
+    destroyed = false;
+    suppressClick = false;
+    constructor(target, options) {
+      injectStyles();
+      this.options = options;
+      this.source = options.source;
+      this.root = document.createElement("div");
+      this.root.className = "bml-root";
+      this.root.dataset.bmlTheme = options.theme ?? "light";
+      if (options.readOnly) this.root.classList.add("bml-readonly");
+      target.appendChild(this.root);
+      this.svg = el("svg", { class: "bml-svg" });
+      this.defs = el("defs");
+      this.viewport = el("g", { class: "bml-viewport" });
+      this.groupLayer = el("g", { class: "bml-groups" });
+      this.edgeLayer = el("g", { class: "bml-edges" });
+      this.nodeLayer = el("g", { class: "bml-nodes" });
+      this.labelLayer = el("g", { class: "bml-labels" });
+      this.overlayLayer = el("g", { class: "bml-overlay" });
+      this.svg.appendChild(this.defs);
+      this.viewport.appendChild(this.groupLayer);
+      this.viewport.appendChild(this.edgeLayer);
+      this.viewport.appendChild(this.nodeLayer);
+      this.viewport.appendChild(this.labelLayer);
+      this.viewport.appendChild(this.overlayLayer);
+      this.svg.appendChild(this.viewport);
+      this.root.appendChild(this.svg);
+      this.legend = document.createElement("div");
+      this.legend.className = "bml-legend";
+      this.root.appendChild(this.legend);
+      this.errorBox = document.createElement("div");
+      this.errorBox.className = "bml-error";
+      this.errorBox.style.display = "none";
+      this.root.appendChild(this.errorBox);
+      this.inspector = document.createElement("aside");
+      this.inspector.className = "bml-inspector";
+      this.root.appendChild(this.inspector);
+      this.buildDefs();
+      this.bindCanvas();
+    }
+    /* ---------------------------------------------------------------- data */
+    parse(source) {
+      const result = parse(source);
+      this.diagnostics = result.diagnostics;
+      this.options.onDiagnostics?.(result.diagnostics);
+      if (hasErrors(result.diagnostics)) {
+        this.showErrors(result.diagnostics);
+        return;
+      }
+      this.hideErrors();
+      const doc = result.document;
+      const layout = autoLayout(doc);
+      for (const node of doc.nodes) {
+        if (!node.at) node.at = layout.get(node.id) ?? { x: 0, y: 0 };
+      }
+      this.doc = doc;
+    }
+    showErrors(diagnostics) {
+      const first = diagnostics.find((d) => d.severity === "error");
+      if (!first) return;
+      this.errorBox.style.display = "block";
+      this.errorBox.innerHTML = `<b>\u7B2C ${first.line} \u884C</b> \xB7 ${escape(first.message)}` + (first.hint ? `<br><code>${escape(first.hint)}</code>` : "");
+    }
+    hideErrors() {
+      this.errorBox.style.display = "none";
+    }
+    /* -------------------------------------------------------------- render */
+    buildDefs() {
+      const shadow = el("filter", {
+        id: "bml-node-shadow",
+        x: "-20%",
+        y: "-20%",
+        width: "140%",
+        height: "140%"
+      });
+      el("feDropShadow", {
+        dx: 0,
+        dy: 1,
+        stdDeviation: 1.6,
+        "flood-color": "#0f172a",
+        "flood-opacity": 0.07
+      }, shadow);
+      this.defs.appendChild(shadow);
+      const shadowSel = el("filter", {
+        id: "bml-node-shadow-sel",
+        x: "-20%",
+        y: "-20%",
+        width: "140%",
+        height: "140%"
+      });
+      el("feDropShadow", {
+        dx: 0,
+        dy: 4,
+        stdDeviation: 7,
+        "flood-color": "#4f46e5",
+        "flood-opacity": 0.22
+      }, shadowSel);
+      this.defs.appendChild(shadowSel);
+      const pattern = el("pattern", {
+        id: "bml-grid",
+        width: 24,
+        height: 24,
+        patternUnits: "userSpaceOnUse"
+      });
+      el("circle", { cx: 1.2, cy: 1.2, r: 1.05, class: "bml-grid-dot" }, pattern);
+      this.defs.appendChild(pattern);
+      const kinds = /* @__PURE__ */ new Set();
+      if (this.doc) for (const edge of this.doc.edges) kinds.add(edge.kind);
+      for (const kind of ["rest", "acp", "sse", "sql", "rpc", "oidc", "llm", "mcp", "ws", "gate", "opt"]) {
+        kinds.add(kind);
+      }
+      for (const kind of kinds) {
+        const marker = el("marker", {
+          id: `bml-arrow-${kind}`,
+          viewBox: "0 0 10 10",
+          refX: 8.4,
+          refY: 5,
+          markerWidth: 6.6,
+          markerHeight: 6.6,
+          orient: "auto-start-reverse"
+        });
+        el("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: edgeKindStyle(kind).color }, marker);
+        this.defs.appendChild(marker);
+      }
+    }
+    render() {
+      if (!this.doc) return;
+      this.nodeEls.clear();
+      this.edgeEls.clear();
+      this.groupEls.clear();
+      this.placedLabels = [];
+      this.groupLayer.innerHTML = "";
+      this.edgeLayer.innerHTML = "";
+      this.nodeLayer.innerHTML = "";
+      this.labelLayer.innerHTML = "";
+      this.overlayLayer.innerHTML = "";
+      const grid = el("rect", {
+        x: -8e3,
+        y: -8e3,
+        width: 16e3,
+        height: 16e3,
+        fill: "url(#bml-grid)"
+      });
+      this.groupLayer.appendChild(grid);
+      this.renderGroups();
+      this.renderEdges();
+      this.renderNodes();
+      this.renderLegend();
+      this.applySelection();
+    }
+    renderGroups() {
+      if (!this.doc) return;
+      for (const group of this.doc.groups) {
+        const members = this.doc.nodes.filter((n) => n.group === group.id);
+        const box = groupBoundingBox(members);
+        if (!box) continue;
+        const color = group.color ?? "#64748b";
+        const rect = el("rect", {
+          x: box.x,
+          y: box.y,
+          width: box.w,
+          height: box.h,
+          rx: 16,
+          fill: color,
+          stroke: color,
+          class: "bml-group-box"
+        });
+        this.groupLayer.appendChild(rect);
+        const text = el("text", {
+          x: box.x + 16,
+          y: box.y + 21,
+          class: "bml-group-label",
+          fill: color
+        });
+        text.textContent = group.label ?? group.title;
+        this.groupLayer.appendChild(text);
+        this.groupEls.set(group.id, { rect, text });
+      }
+    }
+    edgeGeometryOf(edge) {
+      if (!this.doc) return null;
+      return edgeGeometry(edge, { byId: new Map(this.doc.nodes.map((n) => [n.id, n])), pairs: indexPairs(this.doc) });
+    }
+    renderEdges() {
+      if (!this.doc) return;
+      const family = getComputedStyle(this.root).fontFamily;
+      const obstacles = this.doc.nodes.map((n) => ({
+        x: n.at.x - 2,
+        y: n.at.y - 2,
+        w: DEFAULT_BOX.width + 4,
+        h: DEFAULT_BOX.height + 4
+      }));
+      for (const group of this.doc.groups) {
+        const members = this.doc.nodes.filter((n) => n.group === group.id);
+        const box = groupBoundingBox(members);
+        if (!box) continue;
+        const label = group.label ?? group.title;
+        const width = textWidth(label, `600 10.5px ${family}`);
+        obstacles.push({ x: box.x + 8, y: box.y + 5, w: width + 26, h: 24 });
+      }
+      for (const edge of this.doc.edges) {
+        const geo = this.edgeGeometryOf(edge);
+        if (!geo) continue;
+        const style = edgeKindStyle(edge.kind);
+        const dash = edge.dash === null ? style.dash ?? "" : edge.dash ? "6 4" : "";
+        const group = el("g", { class: "bml-edge", "data-id": edge.id });
+        const hit = el("path", { d: pathOf(geo), class: "bml-edge-hit" }, group);
+        const line = el("path", {
+          d: pathOf(geo),
+          class: "bml-edge-line",
+          stroke: style.color,
+          "stroke-dasharray": dash || "none",
+          "marker-end": `url(#bml-arrow-${edge.kind})`
+        }, group);
+        this.edgeLayer.appendChild(group);
+        const labelGroup = el("g", { class: "bml-edge-label-group", "data-id": edge.id });
+        const labelText = edge.label ?? edge.title ?? "";
+        const font = `500 10.5px ${family}`;
+        const shown = truncate(labelText, font, 260);
+        const width = shown ? textWidth(shown, font) : 0;
+        const placed = placeLabel(geo, width, 17, obstacles, this.placedLabels);
+        this.placedLabels.push(placed.rect);
+        edge.__labelT = placed.t;
+        edge.__labelOff = placed.offset;
+        if (shown) {
+          el("rect", {
+            x: placed.x - width / 2 - 5,
+            y: placed.y - 8.5,
+            width: width + 10,
+            height: 17,
+            rx: 4,
+            class: "bml-edge-label-bg"
+          }, labelGroup);
+          const text = el("text", {
+            x: placed.x,
+            y: placed.y + 3.6,
+            "text-anchor": "middle",
+            class: "bml-edge-label"
+          }, labelGroup);
+          text.textContent = shown;
+        }
+        this.labelLayer.appendChild(labelGroup);
+        const onDown = (event) => {
+          if (event.button !== 0) return;
+          event.stopPropagation();
+          this.selectEdge(edge.id);
+        };
+        group.addEventListener("pointerdown", onDown);
+        labelGroup.addEventListener("pointerdown", onDown);
+        this.edgeEls.set(edge.id, { line, hit, labelLayer: labelGroup });
+      }
+    }
+    renderNodes() {
+      if (!this.doc) return;
+      const family = getComputedStyle(this.root).fontFamily;
+      for (const node of this.doc.nodes) {
+        const at = node.at;
+        const style = nodeKindStyle(node.kind);
+        const group = el("g", {
+          class: "bml-node",
+          "data-id": node.id,
+          transform: `translate(${at.x} ${at.y})`
+        });
+        el("rect", { x: 0, y: 0, width: DEFAULT_BOX.width, height: DEFAULT_BOX.height, rx: 10, class: "bml-node-box" }, group);
+        el("rect", { x: 0, y: 12, width: 3.5, height: DEFAULT_BOX.height - 24, rx: 2, fill: style.color }, group);
+        const label = nodeDisplayName(node);
+        const titleFont = `600 13px ${family}`;
+        const title = el("text", { x: 16, y: 27, class: "bml-node-title" }, group);
+        title.textContent = truncate(label, titleFont, 166);
+        const tech = el("text", { x: 16, y: 45, class: "bml-node-tech" }, group);
+        tech.textContent = truncate(node.tech ?? "", `400 10.5px ${family}`, 166);
+        group.addEventListener("pointerdown", (event) => this.startNodeDrag(event, node, group));
+        group.addEventListener("pointerenter", () => {
+          this.hoveredNode = node.id;
+          this.applyFocus();
+        });
+        group.addEventListener("pointerleave", () => {
+          if (this.hoveredNode === node.id) {
+            this.hoveredNode = null;
+            this.applyFocus();
+          }
+        });
+        group.addEventListener("click", () => {
+          if (this.suppressClick) {
+            this.suppressClick = false;
+            return;
+          }
+          this.selectNode(node.id);
+        });
+        this.nodeLayer.appendChild(group);
+        this.nodeEls.set(node.id, group);
+      }
+    }
+    renderLegend() {
+      if (this.options.showLegend === false || !this.doc) {
+        this.legend.style.display = "none";
+        return;
+      }
+      const seen = /* @__PURE__ */ new Set();
+      for (const node of this.doc.nodes) seen.add(node.kind);
+      const items = [...seen].map((kind) => {
+        const style = nodeKindStyle(kind);
+        return `<span class="bml-item"><span class="bml-swatch" style="background:${style.color}"></span>${escape(style.label)}</span>`;
+      });
+      this.legend.innerHTML = `<b>\u56FE\u4F8B</b>${items.join("")}`;
+    }
+    /* --------------------------------------------------------- interaction */
+    applyView() {
+      this.viewport.setAttribute(
+        "transform",
+        `translate(${this.view.x.toFixed(2)} ${this.view.y.toFixed(2)}) scale(${this.view.k.toFixed(4)})`
+      );
+    }
+    toWorld(clientX, clientY) {
+      const rect = this.svg.getBoundingClientRect();
+      return {
+        x: (clientX - rect.left - this.view.x) / this.view.k,
+        y: (clientY - rect.top - this.view.y) / this.view.k
+      };
+    }
+    fit() {
+      if (!this.doc) return;
+      const rect = this.svg.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const bounds = contentBounds(this.doc);
+      const pad = 56;
+      const k = clamp(Math.min(
+        (rect.width - pad * 2) / Math.max(bounds.w, 1),
+        (rect.height - pad * 2) / Math.max(bounds.h, 1)
+      ), 0.15, 1.2);
+      this.view = {
+        k,
+        x: (rect.width - bounds.w * k) / 2 - bounds.x * k,
+        y: (rect.height - bounds.h * k) / 2 - bounds.y * k
+      };
+      this.applyView();
+    }
+    zoomTo(scale) {
+      const rect = this.svg.getBoundingClientRect();
+      const cx = rect.width / 2;
+      const cy = rect.height / 2;
+      const k = clamp(scale, 0.15, 3);
+      this.view.x = cx - (cx - this.view.x) * (k / this.view.k);
+      this.view.y = cy - (cy - this.view.y) * (k / this.view.k);
+      this.view.k = k;
+      this.applyView();
+    }
+    bindCanvas() {
+      let pan = null;
+      this.svg.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        const target = event.target;
+        if (target.closest(".bml-node") || target.closest(".bml-edge")) return;
+        this.selectNode(null);
+        this.selectEdge(null);
+        pan = { sx: event.clientX, sy: event.clientY, vx: this.view.x, vy: this.view.y };
+        this.svg.style.cursor = "grabbing";
+      });
+      window.addEventListener("pointermove", (event) => {
+        if (!pan) return;
+        this.view.x = pan.vx + (event.clientX - pan.sx);
+        this.view.y = pan.vy + (event.clientY - pan.sy);
+        this.applyView();
+      });
+      window.addEventListener("pointerup", () => {
+        if (pan) {
+          pan = null;
+          this.svg.style.cursor = "default";
+        }
+      });
+      this.svg.addEventListener("wheel", (event) => {
+        event.preventDefault();
+        const rect = this.svg.getBoundingClientRect();
+        const sx = event.clientX - rect.left;
+        const sy = event.clientY - rect.top;
+        const k = clamp(this.view.k * Math.exp(-event.deltaY * 16e-4), 0.15, 3);
+        this.view.x = sx - (sx - this.view.x) * (k / this.view.k);
+        this.view.y = sy - (sy - this.view.y) * (k / this.view.k);
+        this.view.k = k;
+        this.applyView();
+      }, { passive: false });
+      window.addEventListener("keydown", this.onKeyDown);
+    }
+    onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        this.selectNode(null);
+        this.selectEdge(null);
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key === "0") {
+        event.preventDefault();
+        this.fit();
+      }
+    };
+    startNodeDrag(event, node, group) {
+      if (event.button !== 0) return;
+      if (this.options.readOnly) return;
+      event.stopPropagation();
+      const start = this.toWorld(event.clientX, event.clientY);
+      const origin = { x: node.at.x, y: node.at.y, x0: start.x, y0: start.y };
+      let moved = false;
+      group.classList.add("bml-dragging");
+      const affected = this.doc?.edges.filter((e) => e.from === node.id || e.to === node.id) ?? [];
+      const onMove = (e) => {
+        const p = this.toWorld(e.clientX, e.clientY);
+        const x = Math.round(origin.x + (p.x - origin.x0));
+        const y = Math.round(origin.y + (p.y - origin.y0));
+        if (x === node.at.x && y === node.at.y) return;
+        node.at = { x, y };
+        moved = true;
+        group.setAttribute("transform", `translate(${x} ${y})`);
+        for (const edge of affected) this.refreshEdge(edge);
+        this.refreshGroups();
+      };
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        group.classList.remove("bml-dragging");
+        if (!moved) return;
+        this.suppressClick = true;
+        setTimeout(() => {
+          this.suppressClick = false;
+        }, 250);
+        this.commit({ nodes: /* @__PURE__ */ new Map([[node.id, node.at]]) });
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    }
+    startBendDrag(event, edge) {
+      if (event.button !== 0 || this.options.readOnly) return;
+      event.stopPropagation();
+      const start = this.toWorld(event.clientX, event.clientY);
+      const base = edge.via ?? { x: 0, y: 0 };
+      const origin = { ...base };
+      const onMove = (e) => {
+        const p = this.toWorld(e.clientX, e.clientY);
+        edge.via = {
+          x: Math.round(origin.x + (p.x - start.x)),
+          y: Math.round(origin.y + (p.y - start.y))
+        };
+        this.refreshEdge(edge);
+        this.refreshBendHandle();
+      };
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        if (!edge.via) return;
+        this.commit({ edges: /* @__PURE__ */ new Map([[edge.id, edge.via]]) });
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    }
+    refreshEdge(edge) {
+      const els = this.edgeEls.get(edge.id);
+      const geo = this.edgeGeometryOf(edge);
+      if (!els || !geo) return;
+      const d = pathOf(geo);
+      els.line.setAttribute("d", d);
+      els.hit.setAttribute("d", d);
+      const family = getComputedStyle(this.root).fontFamily;
+      const font = `500 10.5px ${family}`;
+      const text = truncate(edge.label ?? edge.title ?? "", font, 260);
+      if (!text) return;
+      const width = textWidth(text, font);
+      const t = edge.__labelT ?? 0.5;
+      const off = edge.__labelOff ?? 0;
+      const point = bezierAt(geo.p1, geo.control, geo.p2, t);
+      const bg = els.labelLayer.querySelector(".bml-edge-label-bg");
+      const label = els.labelLayer.querySelector(".bml-edge-label");
+      if (bg) {
+        bg.setAttribute("x", String(point.x - width / 2 - 5));
+        bg.setAttribute("y", String(point.y + off - 8.5));
+      }
+      if (label) {
+        label.setAttribute("x", String(point.x));
+        label.setAttribute("y", String(point.y + off + 3.6));
+      }
+    }
+    refreshGroups() {
+      if (!this.doc) return;
+      for (const group of this.doc.groups) {
+        const els = this.groupEls.get(group.id);
+        if (!els) continue;
+        const members = this.doc.nodes.filter((n) => n.group === group.id);
+        const box = groupBoundingBox(members);
+        if (!box) continue;
+        els.rect.setAttribute("x", String(box.x));
+        els.rect.setAttribute("y", String(box.y));
+        els.rect.setAttribute("width", String(box.w));
+        els.rect.setAttribute("height", String(box.h));
+        els.text.setAttribute("x", String(box.x + 16));
+        els.text.setAttribute("y", String(box.y + 21));
+      }
+    }
+    /* ------------------------------------------------------------ mutation */
+    commit(patch) {
+      if (!this.doc) return;
+      const next = applyLayout(this.source, this.doc, patch);
+      if (next === this.source) return;
+      this.source = next;
+      this.options.onSourceChange?.(next);
+      const selection = { node: this.selectedNode, edge: this.selectedEdge };
+      this.parse(this.source);
+      this.render();
+      this.selectedNode = selection.node;
+      this.selectedEdge = selection.edge;
+      this.applySelection();
+      this.refreshBendHandle();
+    }
+    /* ------------------------------------------------------------ selection */
+    selectNode(id) {
+      this.selectedNode = id;
+      if (id) this.selectedEdge = null;
+      this.applySelection();
+      if (id) this.openNodeInspector(id);
+      else if (!this.selectedEdge) this.closeInspector();
+    }
+    selectEdge(id) {
+      this.selectedEdge = id;
+      if (id) this.selectedNode = null;
+      this.applySelection();
+      if (id) this.openEdgeInspector(id);
+      else this.closeInspector();
+    }
+    applySelection() {
+      for (const [id, node] of this.nodeEls) {
+        node.classList.toggle("bml-selected", id === this.selectedNode);
+      }
+      for (const [id, edge] of this.edgeEls) {
+        edge.line.parentElement?.classList.toggle("bml-selected", id === this.selectedEdge);
+        edge.labelLayer.classList.toggle("bml-selected", id === this.selectedEdge);
+      }
+      this.applyFocus();
+      this.refreshBendHandle();
+    }
+    /** Dim everything that is not on the hovered/selected node. */
+    applyFocus() {
+      const focus = this.selectedNode ?? this.hoveredNode;
+      const edges = this.doc ? relatedEdges(this.doc, focus) : /* @__PURE__ */ new Set();
+      const nodes = this.doc ? relatedNodes(this.doc, focus) : /* @__PURE__ */ new Set();
+      this.root.classList.toggle("bml-focusing", Boolean(focus));
+      for (const [id, els] of this.edgeEls) {
+        const related = edges.has(id);
+        els.line.parentElement?.classList.toggle("bml-related", related);
+        els.labelLayer.classList.toggle("bml-related", related);
+      }
+      for (const [id, el2] of this.nodeEls) {
+        el2.classList.toggle("bml-focus-node", nodes.has(id));
+      }
+    }
+    refreshBendHandle() {
+      this.overlayLayer.innerHTML = "";
+      if (!this.selectedEdge || !this.doc) return;
+      const edge = this.doc.edges.find((e) => e.id === this.selectedEdge);
+      if (!edge) return;
+      const geo = this.edgeGeometryOf(edge);
+      if (!geo) return;
+      el("path", {
+        d: `M ${geo.mid.x} ${geo.mid.y} L ${geo.control.x} ${geo.control.y}`,
+        class: "bml-bend-line"
+      }, this.overlayLayer);
+      const handle = el("circle", {
+        cx: geo.control.x,
+        cy: geo.control.y,
+        r: 6.5,
+        class: "bml-bend-handle"
+      }, this.overlayLayer);
+      handle.addEventListener("pointerdown", (event) => this.startBendDrag(event, edge));
+    }
+    openNodeInspector(id) {
+      if (!this.doc || this.options.showInspector === false) return;
+      const node = this.doc.nodes.find((n) => n.id === id);
+      if (!node) return;
+      const style = nodeKindStyle(node.kind);
+      const sections = [];
+      if (node.note) sections.push(`<h3>\u8BF4\u660E</h3><p>${escape(node.note)}</p>`);
+      if (node.src) sections.push(`<h3>\u51FA\u5904</h3><p><code>${escape(node.src)}</code></p>`);
+      const outgoing = this.doc.edges.filter((e) => e.from === id);
+      const incoming = this.doc.edges.filter((e) => e.to === id);
+      const line = (arrow, title, label) => `<div class="bml-edge-item"><span class="bml-arrow">${arrow}</span><div><div class="bml-t">${escape(title)}</div><div class="bml-l">${escape(label)}</div></div></div>`;
+      if (outgoing.length) {
+        sections.push(`<h3>\u51FA\u8FB9 ${outgoing.length}</h3>`);
+        sections.push(...outgoing.map((e) => {
+          const target = this.doc.nodes.find((n) => n.id === e.to);
+          return line("\u2192", target ? nodeDisplayName(target) : e.to, edgeDisplayName(e));
+        }));
+      }
+      if (incoming.length) {
+        sections.push(`<h3>\u5165\u8FB9 ${incoming.length}</h3>`);
+        sections.push(...incoming.map((e) => {
+          const source = this.doc.nodes.find((n) => n.id === e.from);
+          return line("\u2190", source ? nodeDisplayName(source) : e.from, edgeDisplayName(e));
+        }));
+      }
+      if (!sections.length) sections.push(`<p>\u8FD9\u4E2A\u8282\u70B9\u8FD8\u6CA1\u6709 note / src\u3002</p>`);
+      this.inspector.innerHTML = `
+      <div class="bml-inspector-head">
+        <span class="bml-kind-dot" style="background:${style.color}"></span>
+        <div style="min-width:0">
+          <h2>${escape(nodeDisplayName(node))}</h2>
+          <div class="bml-inspector-meta">${escape(node.id)} \xB7 ${escape(style.label)}</div>
+        </div>
+        <button class="bml-close" data-bml-close>\xD7</button>
+      </div>
+      <div class="bml-inspector-body">${sections.join("")}</div>`;
+      this.bindInspectorClose();
+      this.inspector.classList.add("bml-open");
+    }
+    openEdgeInspector(id) {
+      if (!this.doc || this.options.showInspector === false) return;
+      const edge = this.doc.edges.find((e) => e.id === id);
+      if (!edge) return;
+      const style = edgeKindStyle(edge.kind);
+      const from = this.doc.nodes.find((n) => n.id === edge.from);
+      const to = this.doc.nodes.find((n) => n.id === edge.to);
+      const sections = [];
+      if (edge.note) sections.push(`<h3>\u8BF4\u660E</h3><p>${escape(edge.note)}</p>`);
+      if (edge.src) sections.push(`<h3>\u51FA\u5904</h3><p><code>${escape(edge.src)}</code></p>`);
+      if (!this.options.readOnly) {
+        sections.push(`<h3>\u8C03\u6574\u8D70\u7EBF</h3><p>\u62D6\u52A8\u753B\u5E03\u4E0A\u7684\u5706\u70B9\u6539\u53D8\u66F2\u7387\uFF0C\u5750\u6807\u4F1A\u5199\u56DE\u6587\u4EF6\u91CC\u7684 <code>via</code>\u3002</p>`);
+      }
+      this.inspector.innerHTML = `
+      <div class="bml-inspector-head">
+        <span class="bml-kind-dot" style="background:${style.color}"></span>
+        <div style="min-width:0">
+          <h2>${escape(edgeDisplayName(edge))}</h2>
+          <div class="bml-inspector-meta">${escape(from ? nodeDisplayName(from) : edge.from)} \u2192 ${escape(to ? nodeDisplayName(to) : edge.to)} \xB7 ${escape(style.label)}</div>
+        </div>
+        <button class="bml-close" data-bml-close>\xD7</button>
+      </div>
+      <div class="bml-inspector-body">${sections.join("")}</div>`;
+      this.bindInspectorClose();
+      this.inspector.classList.add("bml-open");
+    }
+    bindInspectorClose() {
+      this.inspector.querySelector("[data-bml-close]")?.addEventListener("click", () => {
+        this.selectNode(null);
+        this.selectEdge(null);
+      });
+    }
+    closeInspector() {
+      this.inspector.classList.remove("bml-open");
+    }
+    /* ---------------------------------------------------------------- api */
+    layout(algorithm) {
+      if (!this.doc) return;
+      const positions = layoutDocument(this.doc, algorithm);
+      for (const node of this.doc.nodes) {
+        const point = positions.get(node.id);
+        if (point) node.at = point;
+      }
+      this.commit({ nodes: positions });
+      this.fit();
+    }
+    update(source) {
+      this.source = source;
+      this.parse(source);
+      this.render();
+      if (!this.fitted) {
+        this.fitted = true;
+        requestAnimationFrame(() => this.fit());
+      }
+    }
+    getSource() {
+      return this.source;
+    }
+    setReadOnly(readOnly) {
+      this.options.readOnly = readOnly;
+      this.root.classList.toggle("bml-readonly", readOnly);
+    }
+    toSVG() {
+      const clone = this.svg.cloneNode(true);
+      clone.setAttribute("xmlns", SVGNS);
+      clone.querySelector(".bml-overlay")?.remove();
+      clone.querySelector(".bml-groups > rect[fill^='url']")?.remove();
+      if (this.doc) {
+        const bounds = contentBounds(this.doc);
+        const pad = 40;
+        clone.setAttribute("viewBox", `${bounds.x - pad} ${bounds.y - pad} ${bounds.w + pad * 2} ${bounds.h + pad * 2}`);
+        clone.setAttribute("width", String(Math.ceil(bounds.w + pad * 2)));
+        clone.setAttribute("height", String(Math.ceil(bounds.h + pad * 2)));
+      }
+      clone.querySelector(".bml-viewport")?.removeAttribute("transform");
+      const style = document.createElementNS(SVGNS, "style");
+      style.textContent = `
+      text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+      .bml-node-box{fill:#fff;stroke:#dbe2ea;stroke-width:1.2}
+      .bml-node-title{font-weight:600;font-size:13px;fill:#0f172a}
+      .bml-node-tech{font-size:10.5px;fill:#7c8999}
+      .bml-group-label{font-size:10.5px;font-weight:600;letter-spacing:.06em}
+      .bml-edge-line{fill:none;stroke-width:1.6}
+      .bml-edge-label{font-size:10.5px;fill:#5c6b7f}
+      .bml-edge-label-bg{fill:#f7f8fa}
+      .bml-edge-hit{display:none}
+    `;
+      clone.insertBefore(style, clone.firstChild);
+      return new XMLSerializer().serializeToString(clone);
+    }
+    getView() {
+      return { ...this.view };
+    }
+    getDocument() {
+      return this.doc;
+    }
+    getDiagnostics() {
+      return this.diagnostics;
+    }
+    destroy() {
+      if (this.destroyed) return;
+      this.destroyed = true;
+      window.removeEventListener("keydown", this.onKeyDown);
+      this.root.remove();
+    }
+  };
+  function placeLabel(geo, width, height, obstacles, placed) {
+    const ts = [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74, 0.18, 0.82];
+    const offsets = [0, -15, 15, -30, 30, -46, 46, -64, 64];
+    for (const offset of offsets) {
+      for (const t of ts) {
+        const point2 = bezierAt(geo.p1, geo.control, geo.p2, t);
+        const rect = { x: point2.x - width / 2 - 5, y: point2.y - height / 2 + offset, w: width + 10, h: height };
+        let blocked = obstacles.some((o) => rectsHit(rect, o, 1));
+        if (!blocked) blocked = placed.some((o) => rectsHit(rect, o, 1));
+        if (!blocked) return { x: point2.x, y: point2.y + offset, t, offset, rect };
+      }
+    }
+    const point = bezierAt(geo.p1, geo.control, geo.p2, 0.5);
+    return {
+      x: point.x,
+      y: point.y,
+      t: 0.5,
+      offset: 0,
+      rect: { x: point.x - width / 2 - 5, y: point.y - height / 2, w: width + 10, h: height }
+    };
+  }
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+  function escape(text) {
+    return String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function mount(target, options) {
+    const viewer = new Viewer(target, options);
+    viewer.update(options.source);
+    return viewer;
+  }
+
+  // packages/viewer/src/standalone.ts
+  function escapeHtml(text) {
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function jsonForScript(value) {
+    return JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+  }
+  function renderStandaloneHTML(options) {
+    const title = options.title ?? "BlockML";
+    const theme = options.theme ?? "light";
+    const readOnly = options.readOnly ?? false;
+    const script = options.viewerScript.replace(/<\/script/gi, "<\\/script");
+    const sourceJson = jsonForScript(options.source);
+    return `<!doctype html>
+<html lang="zh-CN" data-bml-theme="${theme}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(title)}</title>
+<style>
+  html,body{margin:0;height:100%;background:${theme === "dark" ? "#0b1220" : "#f7f8fa"}}
+  #blockml-app{height:100%}
+  #blockml-bar{
+    position:absolute;top:0;left:0;right:0;height:44px;display:flex;align-items:center;gap:10px;
+    padding:0 14px;z-index:20;font:500 12px/1 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;
+    color:${theme === "dark" ? "#94a3b8" : "#475569"};
+    background:${theme === "dark" ? "rgba(11,18,32,.86)" : "rgba(255,255,255,.86)"};
+    border-bottom:1px solid ${theme === "dark" ? "#1e293b" : "#e2e8f0"};
+    backdrop-filter:blur(8px);
+  }
+  #blockml-bar .grow{flex:1}
+  #blockml-bar .name{font-weight:650;color:${theme === "dark" ? "#e2e8f0" : "#0f172a"};font-size:12.5px}
+  #blockml-bar .badge{font:500 10px/1 ui-monospace,monospace;padding:3px 6px;border-radius:5px;
+    background:${theme === "dark" ? "#1e293b" : "#f1f5f9"};color:${theme === "dark" ? "#94a3b8" : "#64748b"}}
+  #blockml-bar button{
+    appearance:none;border:1px solid ${theme === "dark" ? "#1e293b" : "#e2e8f0"};
+    background:${theme === "dark" ? "#0f172a" : "#fff"};
+    color:${theme === "dark" ? "#cbd5e1" : "#475569"};
+    font:500 11.5px/1 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;
+    padding:6px 9px;border-radius:6px;cursor:pointer;
+  }
+  #blockml-bar button:hover{filter:brightness(.97)}
+  #blockml-bar select{
+    appearance:none;border:1px solid ${theme === "dark" ? "#1e293b" : "#e2e8f0"};
+    background:${theme === "dark" ? "#0f172a" : "#fff"};
+    color:${theme === "dark" ? "#cbd5e1" : "#475569"};
+    font:500 11.5px/1 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;
+    padding:6px 22px 6px 9px;border-radius:6px;cursor:pointer;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%2394a3b8' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 7px center;
+  }
+  #blockml-app{position:relative;padding-top:44px}
+  #blockml-mount{position:absolute;inset:44px 0 0 0}
+${options.viewerCss}
+</style>
+</head>
+<body>
+<div id="blockml-app">
+  <div id="blockml-bar">
+    <span class="name">${escapeHtml(title)}</span>
+    <span class="badge">.blockml</span>
+    <span class="grow"></span>
+    <select id="blockml-layout" title="\u91CD\u65B0\u6392\u5217\uFF08\u4F1A\u8986\u76D6\u624B\u5DE5\u5750\u6807\uFF09">
+      <option value="">\u624B\u5DE5\u5E03\u5C40</option>
+      <option value="layered">\u4ECE\u5DE6\u5230\u53F3</option>
+      <option value="pipeline">Pipeline</option>
+      <option value="snowflake">\u96EA\u82B1\u5F62</option>
+      <option value="compact">\u7D27\u51D1\u578B</option>
+    </select>
+    <button data-act="fit">\u9002\u5E94\u7A97\u53E3</button>
+    <button data-act="zoom-in">\uFF0B</button>
+    <button data-act="zoom-out">\uFF0D</button>
+    <button data-act="download">\u4E0B\u8F7D\u6E90\u7801</button>
+  </div>
+  <div id="blockml-mount"></div>
+</div>
+<script id="blockml-source" type="application/json">${sourceJson}<\/script>
+<script>${script}<\/script>
+<script>
+(function(){
+  var source = JSON.parse(document.getElementById("blockml-source").textContent);
+  var handle = BlockML.mount(document.getElementById("blockml-mount"), {
+    source: source,
+    theme: "${theme}",
+    readOnly: ${readOnly}
+  });
+  // Expose the handle for debugging and for embedding pages that want to script it.
+  window.blockmlViewer = handle;
+  window.__blockmlGetSource = function(){ return handle.getSource(); };
+  var actions = {
+    "fit": function(){ handle.fit(); },
+    "zoom-in": function(){ handle.zoomTo(handle.getView().k * 1.25); },
+    "zoom-out": function(){ handle.zoomTo(handle.getView().k / 1.25); },
+    "download": function(){
+      var blob = new Blob([handle.getSource()], {type: "text/plain;charset=utf-8"});
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = ${jsonForScript(title.replace(/[^\w.-]+/g, "-").toLowerCase() + ".blockml")};
+      a.click();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
+    }
+  };
+  document.getElementById("blockml-layout").addEventListener("change", function(event){
+    var algorithm = event.target.value;
+    if (!algorithm) return;
+    handle.layout(algorithm);
+  });
+  document.getElementById("blockml-bar").addEventListener("click", function(event){
+    var button = event.target.closest("button[data-act]");
+    if (!button) return;
+    var fn = actions[button.getAttribute("data-act")];
+    if (fn) fn();
+  });
+})();
+<\/script>
+</body>
+</html>
+`;
+  }
+  return __toCommonJS(index_exports);
+})();
+</script>
+<script>
+(function(){
+  var source = JSON.parse(document.getElementById("blockml-source").textContent);
+  var handle = BlockML.mount(document.getElementById("blockml-mount"), {
+    source: source,
+    theme: "light",
+    readOnly: false
+  });
+  // Expose the handle for debugging and for embedding pages that want to script it.
+  window.blockmlViewer = handle;
+  window.__blockmlGetSource = function(){ return handle.getSource(); };
+  var actions = {
+    "fit": function(){ handle.fit(); },
+    "zoom-in": function(){ handle.zoomTo(handle.getView().k * 1.25); },
+    "zoom-out": function(){ handle.zoomTo(handle.getView().k / 1.25); },
+    "download": function(){
+      var blob = new Blob([handle.getSource()], {type: "text/plain;charset=utf-8"});
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "-.blockml";
+      a.click();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
+    }
+  };
+  document.getElementById("blockml-layout").addEventListener("change", function(event){
+    var algorithm = event.target.value;
+    if (!algorithm) return;
+    handle.layout(algorithm);
+  });
+  document.getElementById("blockml-bar").addEventListener("click", function(event){
+    var button = event.target.closest("button[data-act]");
+    if (!button) return;
+    var fn = actions[button.getAttribute("data-act")];
+    if (fn) fn();
+  });
+})();
+</script>
+</body>
+</html>

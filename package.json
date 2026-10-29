@@ -1,0 +1,26 @@
+{
+  "name": "blockml",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "BlockML — a diagram-as-code language for architecture maps",
+  "license": "MIT",
+  "packageManager": "pnpm@12.4.2",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "example:render": "node packages/cli/bin.mjs render examples/order-platform.blockml -o examples/order-platform.html",
+    "check:examples": "node packages/cli/bin.mjs validate examples/*.blockml skills/blockml/assets/*.blockml"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.28.0",
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.0"
+  }
+}

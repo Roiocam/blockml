@@ -1,0 +1,181 @@
+// 示例：一个虚构的电商订单平台
+// 用来演示分层、多种 kind、并行边与可选依赖；所有系统名、域名、路径均为虚构
+
+diagram {
+  title: "订单平台 · 架构示例"
+  subtitle: "diagram-as-code · 拖动节点或选中连线后拖中点"
+}
+
+group access "接入层" {
+  color: #f59e0b
+}
+
+group core "核心服务" {
+  color: #4f46e5
+}
+
+group data "数据面" {
+  color: #10b981
+}
+
+group partner "外部合作方" {
+  color: #8b5cf6
+}
+
+node storefront "web-storefront" {
+  group: access
+  kind: ui
+  tech: "React SPA · /shop"
+  note: "面向买家的页面，只调用 Gateway，不直连任何后端服务。"
+  src: "docs/frontend.md:12"
+}
+
+node gateway "api-gateway" {
+  group: access
+  kind: service
+  tech: "Spring Cloud Gateway · 8080"
+  note: "唯一对外入口，负责鉴权、限流与请求转发。"
+  src: "docs/services/gateway.md:8-24"
+}
+
+node console "ops-console" {
+  group: access
+  kind: ui
+  tech: "内部控制台 · /ops"
+  note: "运营与客服使用，走同一网关但独立路由前缀。"
+}
+
+node order "order-service" {
+  group: core
+  kind: service
+  tech: "Go 1.22 · 8081"
+  note: """
+订单生命周期：创建、支付、取消、退款。
+所有状态变更写 PostgreSQL，并投递一条领域事件给异步侧。"""
+  src: "docs/services/order.md:1-40"
+}
+
+node inventory "inventory-service" {
+  group: core
+  kind: service
+  tech: "Go 1.22 · 8082"
+  note: "库存预留与释放；用 Redis 做热点 SKU 的预扣计数。"
+  src: "docs/services/inventory.md:5-33"
+}
+
+node payment "payment-service" {
+  group: core
+  kind: service
+  tech: "Go 1.22 · 8083"
+  note: "对接支付渠道；不落卡号，只保存渠道侧的 payment intent 引用。"
+  src: "docs/services/payment.md:3-21"
+}
+
+node worker "event-worker" {
+  group: core
+  kind: service
+  tech: "Go 1.22 · 后台消费"
+  note: "消费订单事件，做通知、对账与埋点，失败进重试队列。"
+}
+
+node analytics "analytics-service" {
+  group: core
+  kind: service
+  tech: "Python 3.12 · 只读"
+  note: "只读副本查询，生成日报与漏斗指标。"
+}
+
+node pg "PostgreSQL" {
+  group: data
+  kind: db
+  tech: "orders · 主从"
+  note: "订单与库存的权威数据；analytics 走只读副本。"
+  src: "docs/db/orders.md:4-18"
+}
+
+node redis "Redis" {
+  group: data
+  kind: cache
+  tech: "库存预扣 · 会话"
+  note: "缓存与短期计数，可丢；不承载权威状态。"
+}
+
+node stripe "Stripe" {
+  group: partner
+  kind: ext
+  tech: "支付渠道 · HTTPS"
+  note: "外部支付服务，webhook 回调到 gateway 的 /hooks/stripe。"
+  src: "docs/integrations/stripe.md:2-9"
+}
+
+node mailer "SendGrid" {
+  group: partner
+  kind: ext
+  tech: "邮件投递 · HTTPS"
+  note: "事务邮件；失败只降级为站内信，不阻塞下单。"
+}
+
+edge storefront -> gateway "REST /api/**" {
+  kind: rest
+}
+
+edge console -> gateway "REST /ops/**" {
+  kind: rest
+}
+
+edge gateway -> order "REST /orders" {
+  kind: rest
+  src: "docs/services/gateway.md:31"
+}
+
+edge gateway -> inventory "REST /stock" {
+  kind: rest
+}
+
+edge order -> inventory "gRPC 预占" {
+  kind: rpc
+}
+
+edge order -> payment "gRPC 扣款" {
+  kind: rpc
+}
+
+edge order -> pg "JDBC · orders" {
+  kind: sql
+}
+
+edge order -> redis "预扣计数" {
+  kind: sql
+}
+
+edge inventory -> pg "JDBC · stock" {
+  kind: sql
+}
+
+edge inventory -> redis "热点计数" {
+  kind: sql
+}
+
+edge payment -> stripe "PaymentIntent" {
+  kind: rest
+}
+
+edge payment -> pg "JDBC · payment_ref" {
+  kind: sql
+}
+
+edge order -> worker "领域事件" {
+  kind: sse
+}
+
+edge worker -> mailer "HTTPS 发信" {
+  kind: rest
+}
+
+edge analytics -> pg "只读副本" {
+  kind: sql
+}
+
+edge worker -> analytics "指标上报" {
+  kind: opt
+}
