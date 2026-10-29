@@ -58,7 +58,7 @@ pnpm --filter @block-ml/desktop tauri dev     # 本机窗口里开发
 pnpm --filter @block-ml/desktop tauri build   # 打包到 apps/desktop/src-tauri/target/release/bundle/
 ```
 
-产物按平台生成：macOS `.app` / `.dmg`、Windows `.msi` / `.exe`、Linux `.AppImage` / `.deb`（在对应系统上构建）。本地构建未签名，对外分发需要自行签名 / 公证。
+产物按平台生成：macOS `.app` / `.dmg`、Windows `.msi` / `.exe`、Linux `.AppImage` / `.deb`（在对应系统上构建）。macOS 包用 ad-hoc 签名（`bundle.macOS.signingIdentity: "-"`），不做公证：首次打开要在「系统设置 → 隐私与安全性」点「仍要打开」，或执行 `xattr -dr com.apple.quarantine /Applications/BlockML.app`；要彻底免提示需要 Apple Developer ID 签名 + 公证。
 
 ## 发布
 

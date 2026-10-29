@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 — 2026-10-29
+
+### 修复
+
+- macOS 安装包被系统判为「已损坏」：此前的 `.app` 只有链接器级临时签名（`adhoc,linker-signed`），bundle 内没有 `_CodeSignature`，macOS 15+ 的 Gatekeeper 会直接报「已损坏，无法打开」。打包配置改为 ad-hoc 深签名（`bundle.macOS.signingIdentity: "-"`），CI 里断言 `_CodeSignature/CodeResources` 存在且 `codesign --verify --deep --strict` 通过；系统提示退回到「无法验证开发者」，按发版说明放行即可。要彻底免提示仍需 Apple Developer ID 签名 + 公证。
+
 ## 0.2.1 — 2026-10-29
 
 ### 修复

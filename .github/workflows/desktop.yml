@@ -69,6 +69,24 @@ jobs:
           tauriScript: pnpm tauri
           args: ${{ matrix.args }}
 
+      # 没有 bundle 级签名时 Gatekeeper 会把 .app 判成「已损坏」（而不是「未验证开发者」）。
+      - name: Verify macOS bundle signature
+        if: matrix.platform == 'macos-latest'
+        run: |
+          app=$(find apps/desktop/src-tauri/target -type d -name '*.app' -path '*release/bundle/macos/*' | head -1)
+          if [ -z "$app" ]; then
+            echo "app bundle not found" >&2
+            exit 1
+          fi
+          echo "bundle: $app"
+          test -f "$app/Contents/_CodeSignature/CodeResources" || {
+            echo "missing Contents/_CodeSignature/CodeResources: bundle was not signed" >&2
+            exit 1
+          }
+          codesign --verify --deep --strict --verbose=2 "$app"
+          # ad-hoc 签名会被 spctl 判为 rejected（未公证），这里只打印，不拦截。
+          spctl -a -vvv "$app" || true
+
       - uses: actions/upload-artifact@v4
         with:
           name: blockml-${{ matrix.artifact }}
@@ -109,5 +127,10 @@ jobs:
             | Windows | `*_x64-setup.exe` 或 `*.msi` |
             | Linux | `*.AppImage` 或 `*.deb` |
 
-            macOS 构建未签名、未公证：首次打开请右键 →「打开」，或执行
-            `xattr -dr com.apple.quarantine /Applications/BlockML.app`。
+            macOS 构建为 ad-hoc 签名、未公证，首次打开会被 Gatekeeper 拦截：
+
+            1. 打开「系统设置 → 隐私与安全性」，在「安全性」一栏点「仍要打开」；
+            2. 或执行 `xattr -dr com.apple.quarantine /Applications/BlockML.app`。
+
+            若提示的是「已损坏」而不是「无法验证开发者」，说明拿到的是 0.2.1 及更早的旧包（缺
+            bundle 签名），请改用 0.2.2+。
