@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 — 2026-10-29
+
+### 修复
+
+- npm 包页没有说明：三个包目录此前没有 `README.md`，registry 里 `readme` 为空，页面只剩标题。现在 `@block-ml/core` / `@block-ml/viewer` / `@block-ml/cli` 各自带上安装、用法与相关包链接的 README，并补了 `homepage` / `bugs` 字段。
+
+语言与渲染行为无变化，版本号只用于把新的包元数据发布上去。
+
 ## 0.2.0 — 2026-10-29
 
 ### 新增

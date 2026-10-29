@@ -1,8 +1,12 @@
 {
   "name": "@block-ml/viewer",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Interactive BlockML canvas: render, drag, export",
   "license": "MIT",
+  "homepage": "https://github.com/Roiocam/blockml#readme",
+  "bugs": {
+    "url": "https://github.com/Roiocam/blockml/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Roiocam/blockml.git",
