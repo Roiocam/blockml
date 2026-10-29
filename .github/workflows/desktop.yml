@@ -1,0 +1,113 @@
+name: desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    name: build (${{ matrix.artifact }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+            artifact: macos-arm64
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin
+            artifact: macos-x64
+          - platform: ubuntu-22.04
+            args: ""
+            artifact: linux-x64
+          - platform: windows-latest
+            args: ""
+            artifact: windows-x64
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+
+      - name: Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libfuse2 \
+            rpm \
+            patchelf \
+            libxdo-dev \
+            libssl-dev
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          args: ${{ matrix.args }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blockml-${{ matrix.artifact }}
+          if-no-files-found: error
+          path: |
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.dmg
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.msi
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.exe
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.AppImage
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.deb
+
+  release:
+    name: publish release
+    needs: bundle
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: List assets
+        run: find assets -type f | sort
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: BlockML ${{ github.ref_name }}
+          fail_on_unmatched_files: true
+          files: assets/**/*
+          body: |
+            桌面版安装包（同一份 `@blockml/viewer`，单文件阅读器的全部能力）。
+
+            | 平台 | 文件 |
+            | --- | --- |
+            | macOS (Apple Silicon) | `*_aarch64.dmg` |
+            | macOS (Intel) | `*_x64.dmg` |
+            | Windows | `*_x64-setup.exe` 或 `*.msi` |
+            | Linux | `*.AppImage` 或 `*.deb` |
+
+            macOS 构建未签名、未公证：首次打开请右键 →「打开」，或执行
+            `xattr -dr com.apple.quarantine /Applications/BlockML.app`。
