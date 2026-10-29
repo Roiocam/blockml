@@ -16,8 +16,8 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "@blockml/core": ["packages/core/src/index.ts"],
-      "@blockml/viewer": ["packages/viewer/src/index.ts"]
+      "@block-ml/core": ["packages/core/src/index.ts"],
+      "@block-ml/viewer": ["packages/viewer/src/index.ts"]
     }
   },
   "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "scripts/**/*.mjs"]

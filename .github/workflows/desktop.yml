@@ -100,7 +100,7 @@ jobs:
           fail_on_unmatched_files: true
           files: assets/**/*
           body: |
-            桌面版安装包（同一份 `@blockml/viewer`，单文件阅读器的全部能力）。
+            桌面版安装包（同一份 `@block-ml/viewer`，单文件阅读器的全部能力）。
 
             | 平台 | 文件 |
             | --- | --- |

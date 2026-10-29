@@ -16,6 +16,7 @@ export interface Point {
 
 export type ThemeName = "light" | "dark" | "auto";
 export type Direction = "TB" | "LR";
+export type RouteStyle = "curve" | "orthogonal";
 
 export interface DiagramDecl {
   type: "diagram";
@@ -23,6 +24,7 @@ export interface DiagramDecl {
   subtitle: string | null;
   theme: ThemeName;
   direction: Direction;
+  route: RouteStyle;
   version: string;
   line: number;
   extra: Record<string, unknown>;
@@ -66,6 +68,8 @@ export interface EdgeDecl {
   kind: string;
   via: Point | null;
   dash: boolean | null;
+  /** Edges sharing a bundle name are drawn as one trunk that branches out. */
+  bundle: string | null;
   note: string | null;
   src: string | null;
   line: number;

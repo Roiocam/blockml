@@ -9,6 +9,7 @@ export type {
   NodeDecl,
   ParseResult,
   Point,
+  RouteStyle,
   Severity,
   ThemeName,
 } from "./ast.js";
@@ -62,16 +63,24 @@ export {
   boxOf,
   contentBounds,
   edgeGeometry,
+  edgeSide,
   groupBoundingBox,
+  orthogonalRoute,
   indexPairs,
   pairKey,
   pathOf,
+  sideRange,
+  sideMidpoint,
+  primarySide,
 } from "./geometry.js";
 export type {
   BoxOptions,
   EdgeGeometry,
+  EdgeSide,
+  ForcedAnchor,
   GeometryContext,
   LayoutOptions,
   NodeBox,
+  OrthogonalRoute,
   Rect,
 } from "./geometry.js";

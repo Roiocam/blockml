@@ -1,5 +1,6 @@
 import {
   applyLayout,
+  anchorPoint,
   parse,
   DEFAULT_BOX,
   autoLayout,
@@ -9,10 +10,12 @@ import {
   edgeDisplayName,
   edgeGeometry,
   edgeKindStyle,
+  edgeSide,
   groupBoundingBox,
   groupEdgeCount,
-  hasErrors,
   indexPairs,
+  orthogonalRoute,
+  hasErrors,
   isNodeVisible,
   layoutDocument,
   nodeDisplayName,
@@ -20,8 +23,11 @@ import {
   relatedNodes,
   nodeKindStyle,
   pathOf,
+  primarySide,
   resolveVisibility,
   serialize,
+  sideMidpoint,
+  sideRange,
   visibleEdges,
   visibleGroups,
   visibleNodes,
@@ -30,15 +36,20 @@ import {
   type BlockDocument,
   type Diagnostic,
   type EdgeDecl,
+  type EdgeSide,
   type EdgeGeometry,
+  type ForcedAnchor,
   type GroupDecl,
   type NodeDecl,
+  type NodeBox,
   type LayoutAlgorithm,
+  type OrthogonalRoute,
   type ParseResult,
   type Point,
   type Rect,
+  type RouteStyle,
   type Visibility,
-} from "@blockml/core";
+} from "@block-ml/core";
 import { VIEWER_CSS } from "./styles.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
@@ -138,15 +149,6 @@ function truncate(text: string, font: string, maxWidth: number): string {
   return text.slice(0, lo) + "…";
 }
 
-function rectsHit(a: Rect, b: Rect, pad: number): boolean {
-  return !(
-    a.x + a.w + pad < b.x ||
-    b.x + b.w + pad < a.x ||
-    a.y + a.h + pad < b.y ||
-    b.y + b.h + pad < a.y
-  );
-}
-
 class Viewer implements ViewerHandle {
   private root: HTMLElement;
   private svg: SVGSVGElement;
@@ -154,6 +156,7 @@ class Viewer implements ViewerHandle {
   private groupLayer: SVGGElement;
   private edgeLayer: SVGGElement;
   private nodeLayer: SVGGElement;
+  private headerLayer: SVGGElement;
   private labelLayer: SVGGElement;
   private uiLayer: SVGGElement;
   private overlayLayer: SVGGElement;
@@ -170,8 +173,19 @@ class Viewer implements ViewerHandle {
   private viewDoc: BlockDocument | null = null;
   private diagnostics: Diagnostic[] = [];
   private view = { x: 40, y: 20, k: 1 };
+  private routeStyle: RouteStyle = "curve";
   private selectedNode: string | null = null;
+  private selectedNodes = new Set<string>();
   private selectedEdge: string | null = null;
+  private pointerSelected = false;
+  private fans = new Map<string, { from?: number; to?: number }>();
+  private bundleOf = new Map<string, string>();
+  private bundleInfo = new Map<
+    string,
+    { end: "from" | "to"; trunk?: { x?: number; y?: number }; sharedX: number; sharedY: number }
+  >();
+  private forcedAnchors = new Map<string, { from?: ForcedAnchor; to?: ForcedAnchor }>();
+  private trunks = new Map<string, { x?: number; y?: number }>();
   private hoveredNode: string | null = null;
   private hiddenNodes = new Set<string>();
   private hiddenGroups = new Set<string>();
@@ -204,6 +218,7 @@ class Viewer implements ViewerHandle {
     this.viewport = el("g", { class: "bml-viewport" });
     this.groupLayer = el("g", { class: "bml-groups" });
     this.edgeLayer = el("g", { class: "bml-edges" });
+    this.headerLayer = el("g", { class: "bml-group-heads" });
     this.nodeLayer = el("g", { class: "bml-nodes" });
     this.labelLayer = el("g", { class: "bml-labels" });
     this.uiLayer = el("g", { class: "bml-ui" });
@@ -212,6 +227,7 @@ class Viewer implements ViewerHandle {
     this.svg.appendChild(this.defs);
     this.viewport.appendChild(this.groupLayer);
     this.viewport.appendChild(this.edgeLayer);
+    this.viewport.appendChild(this.headerLayer);
     this.viewport.appendChild(this.nodeLayer);
     this.viewport.appendChild(this.labelLayer);
     this.viewport.appendChild(this.uiLayer);
@@ -377,6 +393,7 @@ class Viewer implements ViewerHandle {
 
   private render(): void {
     if (!this.doc || !this.viewDoc) return;
+    this.routeStyle = this.doc.diagram?.route ?? "curve";
     this.nodeEls.clear();
     this.edgeEls.clear();
     this.groupEls.clear();
@@ -384,6 +401,7 @@ class Viewer implements ViewerHandle {
     this.groupLayer.innerHTML = "";
     this.edgeLayer.innerHTML = "";
     this.nodeLayer.innerHTML = "";
+    this.headerLayer.innerHTML = "";
     this.labelLayer.innerHTML = "";
     this.uiLayer.innerHTML = "";
     this.overlayLayer.innerHTML = "";
@@ -423,6 +441,7 @@ class Viewer implements ViewerHandle {
       }) as SVGRectElement;
       this.groupLayer.appendChild(rect);
 
+      const family = getComputedStyle(this.root).fontFamily;
       const text = el("text", {
         x: box.x + 16, y: box.y + (collapsed ? 24 : 21),
         class: "bml-group-label", fill: color,
@@ -430,11 +449,23 @@ class Viewer implements ViewerHandle {
       text.textContent = collapsed
         ? truncate(
             `${label} · ${members.length} 节点 / ${groupEdgeCount(this.doc, group.id)} 连线`,
-            `600 10.5px ${getComputedStyle(this.root).fontFamily}`,
+            `600 10.5px ${family}`,
             box.w - 42,
           )
         : label;
-      this.groupLayer.appendChild(text);
+      // The header sits above the edge layer, with a pill masking any line that
+      // passes behind it, so routes never slice through the title text.
+      const head = el("g", { class: "bml-group-head", "data-id": group.id });
+      const headWidth = textWidth(text.textContent, `600 10.5px ${family}`) + 16;
+      el("rect", {
+        x: box.x + 10, y: box.y + (collapsed ? 11 : 8), width: headWidth, height: 17, rx: 4,
+        class: "bml-group-label-bg",
+        // Matches the tint the group box paints over the canvas, so the pill
+        // is invisible against the group but still hides any line behind it.
+        style: `fill:color-mix(in srgb, var(--bml-label-bg) ${collapsed ? 90 : 94}%, ${color} ${collapsed ? 10 : 6}%)`,
+      }, head);
+      head.appendChild(text);
+      this.headerLayer.appendChild(head);
 
       const toggle = el("g", {
         class: "bml-group-toggle",
@@ -468,24 +499,288 @@ class Viewer implements ViewerHandle {
   private edgeGeometryOf(edge: EdgeDecl): EdgeGeometry | null {
     if (!this.viewDoc) return null;
     return edgeGeometry(edge, {
-      byId: new Map(this.viewDoc.nodes.map((n) => [n.id, n])),
+      byId: this.nodeMap(),
       pairs: indexPairs(this.viewDoc),
+      fans: this.fans,
     });
   }
 
-  private renderEdges(): void {
-    if (!this.doc || !this.viewDoc) return;
+  private nodeMap(): Map<string, NodeDecl> {
+    return new Map(this.viewDoc?.nodes.map((n) => [n.id, n]) ?? []);
+  }
+
+  /**
+   * Edges that meet at a node fan out along its border instead of leaving from
+   * the same anchor point, so they never draw on top of each other. Offsets
+   * follow the anchor's position along the border — sorting by target angle
+   * would invert the order and cancel the spread.
+   */
+  private computeFans(): void {
+    this.fans = new Map();
+    if (!this.viewDoc) return;
+    const nodes = this.nodeMap();
+    type FanItem = { edge: EdgeDecl; end: "from" | "to"; side: EdgeSide; box: Rect; along: number };
+    const groups = new Map<string, FanItem[]>();
+    const push = (nodeId: string, item: FanItem) => {
+      const key = `${nodeId}\u0000${item.side}`;
+      const list = groups.get(key);
+      if (list) list.push(item);
+      else groups.set(key, [item]);
+    };
+    for (const edge of this.viewDoc.edges) {
+      const from = nodes.get(edge.from);
+      const to = nodes.get(edge.to);
+      if (!from || !to) continue;
+      const fc = boxOf(from);
+      const tc = boxOf(to);
+      const a1 = anchorPoint(from, { x: tc.cx, y: tc.cy });
+      const a2 = anchorPoint(to, { x: fc.cx, y: fc.cy });
+      const s1 = edgeSide(a1, fc);
+      const s2 = edgeSide(a2, tc);
+      const along = (point: Point, side: EdgeSide) => (side === "top" || side === "bottom" ? point.x : point.y);
+      push(edge.from, { edge, end: "from", side: s1, box: fc, along: along(a1, s1) });
+      push(edge.to, { edge, end: "to", side: s2, box: tc, along: along(a2, s2) });
+    }
+    for (const list of groups.values()) {
+      if (list.length < 2) continue;
+      list.sort((a, b) => a.along - b.along);
+      const box = list[0]!.box;
+      const range = sideRange(box, list[0]!.side as EdgeSide);
+      // Targets are laid out inside the usable border span, so the offsets
+      // themselves never clamp at the ends and collapse two anchors together.
+      const step = Math.min(14, (range.max - range.min) / (list.length - 1));
+      const span = step * (list.length - 1);
+      const midpoint = (list[0]!.along + list[list.length - 1]!.along) / 2;
+      const start = clamp(midpoint - span / 2, range.min, range.max - span);
+      list.forEach((item, index) => {
+        const offset = Math.round(start + index * step - item.along);
+        if (!offset) return;
+        const slot = this.fans.get(item.edge.id) ?? {};
+        slot[item.end] = offset;
+        this.fans.set(item.edge.id, slot);
+      });
+    }
+  }
+
+  /**
+   * Edges that declare the same `bundle:` share their common endpoint and a
+   * trunk, so a node reaching several peers draws one line that branches out
+   * instead of a stack of near-parallel ones.
+   */
+  private computeBundles(): void {
+    this.bundleOf = new Map();
+    this.bundleInfo = new Map();
+    this.forcedAnchors = new Map();
+    this.trunks = new Map();
+    if (!this.viewDoc) return;
+    const nodes = this.nodeMap();
+    const boxes = new Map([...nodes].map(([id, node]) => [id, boxOf(node)]));
+    const groups = new Map<string, EdgeDecl[]>();
+    for (const edge of this.viewDoc.edges) {
+      if (!edge.bundle) continue;
+      const list = groups.get(edge.bundle);
+      if (list) list.push(edge);
+      else groups.set(edge.bundle, [edge]);
+    }
+    for (const [name, list] of groups) {
+      if (list.length < 2) continue;
+      let end: "from" | "to" | null = null;
+      for (const candidate of ["from", "to"] as const) {
+        const sharedId = list[0]![candidate];
+        if (list.every((edge) => edge[candidate] === sharedId)) {
+          end = candidate;
+          break;
+        }
+      }
+      if (!end) continue;
+      const other = end === "from" ? "to" : "from";
+      const sharedNode = nodes.get(list[0]![end]);
+      const sharedBox = sharedNode ? boxes.get(sharedNode.id) : undefined;
+      if (!sharedNode || !sharedBox) continue;
+      const peers = list
+        .map((edge) => ({ edge, node: nodes.get(edge[other]), box: boxes.get(edge[other]) }))
+        .filter((item): item is { edge: EdgeDecl; node: NodeDecl; box: NodeBox } => !!item.node && !!item.box);
+      if (peers.length < 2) continue;
+      const centroid = {
+        x: peers.reduce((sum, item) => sum + item.box.cx, 0) / peers.length,
+        y: peers.reduce((sum, item) => sum + item.box.cy, 0) / peers.length,
+      };
+      const side = edgeSide(anchorPoint(sharedNode, centroid), sharedBox);
+      const point = sideMidpoint(sharedBox, side);
+      const horizontal = side === "left" || side === "right";
+      const others = peers.map((item) => {
+        const peerPoint = anchorPoint(item.node, { x: sharedBox.cx, y: sharedBox.cy });
+        return { side: edgeSide(peerPoint, item.box), at: horizontal ? peerPoint.x : peerPoint.y };
+      });
+      let trunk: { x?: number; y?: number } | undefined;
+      const sameAxis = others.every((peer) => (peer.side === "left" || peer.side === "right") === horizontal);
+      if (sameAxis) {
+        const border = horizontal
+          ? side === "left"
+            ? sharedBox.x
+            : sharedBox.x + sharedBox.w
+          : side === "top"
+            ? sharedBox.y
+            : sharedBox.y + sharedBox.h;
+        const outward = side === "left" || side === "top" ? -1 : 1;
+        const values = others.map((peer) => peer.at);
+        const middle = (border + values.reduce((sum, value) => sum + value, 0) / values.length) / 2;
+        const nearNode = border + outward * 30;
+        const nearPeers = (outward > 0 ? Math.min(...values) : Math.max(...values)) - outward * 20;
+        const low = Math.min(nearNode, nearPeers);
+        const high = Math.max(nearNode, nearPeers);
+        const at = Math.round(clamp(middle, low, high));
+        const valid = outward > 0 ? at >= nearNode && at <= nearPeers : at <= nearNode && at >= nearPeers;
+        if (valid) trunk = horizontal ? { x: at } : { y: at };
+      }
+      for (const item of peers) {
+        this.bundleOf.set(item.edge.id, name);
+        this.bundleInfo.set(item.edge.id, { end, trunk, sharedX: point.x, sharedY: point.y });
+        const forced = this.forcedAnchors.get(item.edge.id) ?? {};
+        forced[end] = { point, side };
+        this.forcedAnchors.set(item.edge.id, forced);
+        if (trunk) this.trunks.set(item.edge.id, trunk);
+      }
+    }
+  }
+
+  /**
+   * Orthogonal routes for every edge. Lanes shift the trunk/stub of an edge so
+   * no two edges draw on the same line; leftover conflicts are repaired by
+   * re-laning the earlier edge while the total overlap keeps dropping.
+   */
+  private buildOrthogonalRoutes(
+    nodeObstacles: { id: string; rect: Rect }[],
+    soft: Rect[],
+  ): Map<string, OrthogonalRoute> {
+    const routes = new Map<string, OrthogonalRoute>();
+    if (!this.viewDoc) return routes;
+    this.computeBundles();
+    const ctx = {
+      byId: this.nodeMap(),
+      pairs: indexPairs(this.viewDoc),
+      fans: this.fans,
+      obstacles: nodeObstacles,
+      soft,
+      anchors: this.forcedAnchors,
+      trunks: this.trunks,
+    };
+    const edges = this.viewDoc.edges;
+    const LANES = [0, 1, -1, 2, -2, 3, -3, 4, -4];
+    // The router scores every side pair per lane, so compute the candidates
+    // once up front; the greedy and repair passes only look them up.
+    const candidates = new Map<string, Map<number, OrthogonalRoute>>();
+    for (const edge of edges) {
+      const perLane = new Map<number, OrthogonalRoute>();
+      // Bundled edges share one trunk, so they must stay on the base lane.
+      const lanesFor = this.bundleOf.has(edge.id) ? [0] : LANES;
+      for (const lane of lanesFor) {
+        const route = orthogonalRoute(edge, ctx, lane);
+        if (route) perLane.set(lane, route);
+      }
+      candidates.set(edge.id, perLane);
+    }
+    const lanes = new Map<string, number>();
+    const routeOf = (edge: EdgeDecl): OrthogonalRoute | undefined =>
+      candidates.get(edge.id)?.get(lanes.get(edge.id) ?? 0);
+
+    const sameBundle = (a: string, b: string): boolean => {
+      const bundle = this.bundleOf.get(a);
+      return bundle !== undefined && bundle === this.bundleOf.get(b);
+    };
+    // Two edges in the same color can share a line and still read as one
+    // stroke, so their overlap is a soft cost; different colors must separate.
+    const colorOf = new Map(edges.map((edge) => [edge.id, edgeKindStyle(edge.kind).color]));
+    const weightOf = (a: string, b: string): number => (colorOf.get(a) === colorOf.get(b) ? 0.25 : 1);
+
+    const accepted: { id: string; points: Point[] }[] = [];
+    for (const edge of edges) {
+      let chosen = 0;
+      for (const lane of this.bundleOf.has(edge.id) ? [0] : LANES) {
+        const route = candidates.get(edge.id)?.get(lane);
+        if (!route) continue;
+        const clash = accepted.some((item) => {
+          if (sameBundle(item.id, edge.id)) return false;
+          const shared = overlapLength(item.points, route.points, sharedPort(item.points, route.points)?.axis);
+          return shared > (weightOf(item.id, edge.id) < 1 ? 40 : 1);
+        });
+        if (clash) continue;
+        chosen = lane;
+        break;
+      }
+      lanes.set(edge.id, chosen);
+      const route = candidates.get(edge.id)?.get(chosen);
+      if (route) accepted.push({ id: edge.id, points: route.points });
+    }
+
+    const totalOverlap = (): number => {
+      const routed = edges
+        .map((edge) => ({ id: edge.id, points: routeOf(edge)?.points }))
+        .filter((item): item is { id: string; points: Point[] } => !!item.points);
+      let total = 0;
+      for (let i = 0; i < routed.length; i++) {
+        for (let j = i + 1; j < routed.length; j++) {
+          const a = routed[i]!;
+          const b = routed[j]!;
+          if (sameBundle(a.id, b.id)) continue;
+          const shared = sharedPort(a.points, b.points)?.axis;
+          total += overlapLength(a.points, b.points, shared) * weightOf(a.id, b.id);
+          total += nearParallelLength(a.points, b.points, shared) * weightOf(a.id, b.id);
+        }
+      }
+      return total;
+    };
+    let score = totalOverlap();
+    for (let guard = 0; guard < 6 && score > 0; guard++) {
+      let improved = false;
+      for (const edge of edges) {
+        const previous = lanes.get(edge.id) ?? 0;
+        for (const lane of LANES) {
+          if (lane === previous || !candidates.get(edge.id)?.has(lane)) continue;
+          lanes.set(edge.id, lane);
+          const trialScore = totalOverlap();
+          if (trialScore < score - 0.5) {
+            score = trialScore;
+            improved = true;
+            break;
+          }
+          lanes.set(edge.id, previous);
+        }
+        if (improved) break;
+      }
+      if (!improved) break;
+    }
+    for (const edge of edges) {
+      const route = routeOf(edge);
+      if (route) routes.set(edge.id, route);
+    }
+    return routes;
+  }
+
+  private collectObstacles(): {
+    labels: Rect[];
+    routes: { id: string; rect: Rect }[];
+    soft: Rect[];
+  } {
     const family = getComputedStyle(this.root).fontFamily;
-    const obstacles: Rect[] = this.viewDoc.nodes.map((n) => ({
+    const view = this.viewDoc;
+    if (!view) return { labels: [], routes: [], soft: [] };
+    const doc = this.doc;
+    const labels: Rect[] = view.nodes.map((n) => ({
       x: n.at!.x - 2, y: n.at!.y - 2, w: DEFAULT_BOX.width + 4, h: DEFAULT_BOX.height + 4,
     }));
-    for (const group of this.viewDoc.groups) {
-      const members = this.doc.nodes.filter((n) => n.group === group.id);
+    // Routes dodge node boxes and group labels/chips as well.
+    const routes: { id: string; rect: Rect }[] = view.nodes.map((n) => ({ id: n.id, rect: boxOf(n) }));
+    const soft: Rect[] = [];
+    for (const group of view.groups) {
+      const members = doc?.nodes.filter((n) => n.group === group.id) ?? [];
       const full = groupBoundingBox(members);
       if (!full) continue;
       if (this.collapsedGroups.has(group.id)) {
         const chip = this.collapseChip(full);
-        obstacles.push({ x: chip.x, y: chip.y, w: chip.w, h: chip.h });
+        const rect = { x: chip.x, y: chip.y, w: chip.w, h: chip.h };
+        labels.push(rect);
+        routes.push({ id: `group:${group.id}`, rect });
         continue;
       }
       const shown = members.filter((node) => isNodeVisible(node, this.visibility()));
@@ -493,19 +788,112 @@ class Viewer implements ViewerHandle {
       if (!box) continue;
       const label = group.label ?? group.title;
       const width = textWidth(label, `600 10.5px ${family}`);
-      obstacles.push({ x: box.x + 8, y: box.y + 5, w: width + 26, h: 24 });
+      const header = { x: box.x + 8, y: box.y + 5, w: width + 26, h: 24 };
+      labels.push(header);
+      soft.push(header);
     }
+    return { labels, routes, soft };
+  }
+
+  /**
+   * Positions along each route that sit on another edge. A label anchored there
+   * would name a line that belongs to someone else.
+   */
+  private foreignMarks(paths: Map<string, PolyPath>): Map<string, boolean[]> {
+    const out = new Map<string, boolean[]>();
+    if (paths.size < 2) return out;
+    const SAMPLES = 160;
+    const routes = [...paths];
+    const on = (point: Point, start: Point, end: Point): boolean => {
+      const horizontal = Math.abs(start.y - end.y) < 0.5;
+      if (horizontal) {
+        if (Math.abs(point.y - start.y) > 1.5) return false;
+        return point.x >= Math.min(start.x, end.x) - 1 && point.x <= Math.max(start.x, end.x) + 1;
+      }
+      if (Math.abs(point.x - start.x) > 1.5) return false;
+      return point.y >= Math.min(start.y, end.y) - 1 && point.y <= Math.max(start.y, end.y) + 1;
+    };
+    for (const [id, path] of routes) {
+      const marks: boolean[] = new Array(SAMPLES + 1).fill(false);
+      for (let k = 0; k <= SAMPLES; k++) {
+        const point = pointAtLength(path, (k / SAMPLES) * path.total);
+        for (const [otherId, other] of routes) {
+          if (otherId === id) continue;
+          const points = other.points;
+          for (let j = 0; j < points.length - 1; j++) {
+            if (on(point, points[j]!, points[j + 1]!)) {
+              marks[k] = true;
+              break;
+            }
+          }
+          if (marks[k]) break;
+        }
+      }
+      out.set(id, marks);
+    }
+    return out;
+  }
+
+  /** Label window that keeps bundled labels off the shared trunk. */
+  private bundleLabelRange(path: PolyPath, edgeId: string): [number, number] | undefined {
+    const info = this.bundleInfo.get(edgeId);
+    if (!info?.trunk) return undefined;
+    const axis = info.trunk.x !== undefined ? "x" : "y";
+    const shared = axis === "x" ? info.sharedY : info.sharedX;
+    const points = path.points;
+    const onShared = (index: number) => {
+      const point = points[index];
+      return !!point && Math.abs((axis === "x" ? point.y : point.x) - shared) < 0.5;
+    };
+    const margin = 10;
+    if (info.end === "from") {
+      let cut = 0;
+      while (cut + 1 < points.length && onShared(cut + 1)) cut++;
+      const start = (path.lengths[cut] ?? 0) + margin;
+      return path.total ? [Math.min(1, start / path.total), 1] : undefined;
+    }
+    let cut = points.length - 1;
+    while (cut - 1 >= 0 && onShared(cut - 1)) cut--;
+    const end = (path.lengths[cut] ?? 0) - margin;
+    return path.total ? [0, Math.max(0, end / path.total)] : undefined;
+  }
+
+  private renderEdges(): void {
+    if (!this.doc || !this.viewDoc) return;
+    this.computeFans();
+    const { labels: obstacles, routes: routeObstacles, soft } = this.collectObstacles();
+
+    const orthogonal = this.routeStyle === "orthogonal";
+    const geos = new Map<string, EdgeGeometry>();
+    const routePaths = new Map<string, PolyPath>();
+    let routes: Map<string, OrthogonalRoute> | null = null;
+    if (orthogonal) {
+      routes = this.buildOrthogonalRoutes(routeObstacles, soft);
+      for (const [id, route] of routes) routePaths.set(id, pathMetrics(route.points));
+    } else {
+      for (const edge of this.viewDoc.edges) {
+        const geo = this.edgeGeometryOf(edge);
+        if (geo) geos.set(edge.id, geo);
+      }
+    }
+    const hops = orthogonal ? null : computeHops(this.viewDoc.edges, geos);
+    const orthHops = routes ? computePolylineHops(this.viewDoc.edges, routes) : null;
+    const foreign = this.foreignMarks(routePaths);
 
     for (const edge of this.viewDoc.edges) {
-      const geo = this.edgeGeometryOf(edge);
-      if (!geo) continue;
+      const path = routePaths.get(edge.id);
+      const geo = geos.get(edge.id);
+      if (orthogonal ? !path : !geo) continue;
       const style = edgeKindStyle(edge.kind);
       const dash = edge.dash === null ? style.dash ?? "" : edge.dash ? "6 4" : "";
+      const d = orthogonal
+        ? polylinePath(path!.points, orthHops?.get(edge.id))
+        : edgePath(geo!, hops!.get(edge.id));
 
       const group = el("g", { class: "bml-edge", "data-id": edge.id });
-      const hit = el("path", { d: pathOf(geo), class: "bml-edge-hit" }, group);
+      const hit = el("path", { d, class: "bml-edge-hit" }, group);
       const line = el("path", {
-        d: pathOf(geo),
+        d,
         class: "bml-edge-line",
         stroke: style.color,
         "stroke-dasharray": dash || "none",
@@ -515,10 +903,12 @@ class Viewer implements ViewerHandle {
 
       const labelGroup = el("g", { class: "bml-edge-label-group", "data-id": edge.id });
       const labelText = edge.label ?? edge.title ?? "";
-      const font = `500 10.5px ${family}`;
+      const font = `500 10.5px ${getComputedStyle(this.root).fontFamily}`;
       const shown = truncate(labelText, font, 260);
       const width = shown ? textWidth(shown, font) : 0;
-      const placed = placeLabel(geo, width, 17, obstacles, this.placedLabels);
+      const placed = path
+        ? placeLabelOnPath(path, width, 17, obstacles, this.placedLabels, this.bundleLabelRange(path, edge.id), foreign.get(edge.id))
+        : placeLabel(geo!, width, 17, obstacles, this.placedLabels);
       this.placedLabels.push(placed.rect);
       (edge as EdgeDecl & { __labelT?: number; __labelOff?: number }).__labelT = placed.t;
       (edge as EdgeDecl & { __labelOff?: number }).__labelOff = placed.offset;
@@ -569,7 +959,7 @@ class Viewer implements ViewerHandle {
       const tech = el("text", { x: 16, y: 45, class: "bml-node-tech" }, group);
       tech.textContent = truncate(node.tech ?? "", `400 10.5px ${family}`, 166);
 
-      group.addEventListener("pointerdown", (event) => this.startNodeDrag(event, node, group));
+      group.addEventListener("pointerdown", (event) => this.startNodeDrag(event, node));
       group.addEventListener("pointerenter", () => {
         this.hoveredNode = node.id;
         this.applyFocus();
@@ -580,9 +970,10 @@ class Viewer implements ViewerHandle {
           this.applyFocus();
         }
       });
-      group.addEventListener("click", () => {
-        if (this.suppressClick) { this.suppressClick = false; return; }
-        this.selectNode(node.id);
+      group.addEventListener("click", (event) => {
+        if (this.suppressClick) { this.suppressClick = false; this.pointerSelected = false; return; }
+        if (this.pointerSelected) { this.pointerSelected = false; return; }
+        this.selectNode(node.id, event.shiftKey || event.ctrlKey || event.metaKey);
       });
 
       this.nodeLayer.appendChild(group);
@@ -702,38 +1093,64 @@ class Viewer implements ViewerHandle {
     }
   };
 
-  private startNodeDrag(event: PointerEvent, node: NodeDecl, group: SVGGElement): void {
+  private startNodeDrag(event: PointerEvent, node: NodeDecl): void {
     if (event.button !== 0) return;
     if (this.options.readOnly) return;
     event.stopPropagation();
 
-    const start = this.toWorld(event.clientX, event.clientY);
-    const origin = { x: node.at!.x, y: node.at!.y, x0: start.x, y0: start.y };
-    let moved = false;
-    group.classList.add("bml-dragging");
+    const additive = event.shiftKey || event.ctrlKey || event.metaKey;
+    if (!this.selectedNodes.has(node.id)) {
+      this.selectNode(node.id, additive);
+      this.pointerSelected = true;
+    } else if (!additive && this.selectedNodes.size > 1) {
+      // Keep the multi-selection so the whole group can be dragged at once.
+      this.selectedNode = node.id;
+      this.selectedEdge = null;
+      this.applySelection();
+    }
 
-    const affected = this.viewDoc?.edges.filter((e) => e.from === node.id || e.to === node.id) ?? [];
+    const start = this.toWorld(event.clientX, event.clientY);
+    const moving = this.viewDoc?.nodes.filter((n) => this.selectedNodes.has(n.id) && n.at) ?? [];
+    if (!moving.length) return;
+    const origins = new Map(moving.map((n) => [n.id, { x: n.at!.x, y: n.at!.y }]));
+    const affected = this.viewDoc?.edges.filter(
+      (e) => this.selectedNodes.has(e.from) || this.selectedNodes.has(e.to),
+    ) ?? [];
+    let moved = false;
+    for (const n of moving) this.nodeEls.get(n.id)?.classList.add("bml-dragging");
 
     const onMove = (e: PointerEvent) => {
       const p = this.toWorld(e.clientX, e.clientY);
-      const x = Math.round(origin.x + (p.x - origin.x0));
-      const y = Math.round(origin.y + (p.y - origin.y0));
-      if (x === node.at!.x && y === node.at!.y) return;
-      node.at = { x, y };
-      moved = true;
-      group.setAttribute("transform", `translate(${x} ${y})`);
-      for (const edge of affected) this.refreshEdge(edge);
+      const dx = Math.round(p.x - start.x);
+      const dy = Math.round(p.y - start.y);
+      if (!dx && !dy) return;
+      for (const n of moving) {
+        const origin = origins.get(n.id)!;
+        const x = origin.x + dx;
+        const y = origin.y + dy;
+        if (n.at!.x === x && n.at!.y === y) continue;
+        n.at = { x, y };
+        moved = true;
+        this.nodeEls.get(n.id)?.setAttribute("transform", `translate(${x} ${y})`);
+      }
+      if (!moved) return;
+      if (this.routeStyle === "orthogonal") {
+        this.refreshEdgePaths();
+      } else {
+        for (const edge of affected) this.refreshEdge(edge);
+        this.refreshEdgePaths();
+      }
       this.refreshGroups();
     };
 
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      group.classList.remove("bml-dragging");
+      for (const n of moving) this.nodeEls.get(n.id)?.classList.remove("bml-dragging");
       if (!moved) return;
       this.suppressClick = true;
       setTimeout(() => { this.suppressClick = false; }, 250);
-      this.commit({ nodes: new Map([[node.id, node.at!]]) });
+      this.commit({ nodes: new Map(moving.map((n) => [n.id, n.at!])) });
     };
 
     window.addEventListener("pointermove", onMove);
@@ -742,6 +1159,7 @@ class Viewer implements ViewerHandle {
 
   private startBendDrag(event: PointerEvent, edge: EdgeDecl): void {
     if (event.button !== 0 || this.options.readOnly) return;
+    if (this.routeStyle === "orthogonal") return;
     event.stopPropagation();
     const start = this.toWorld(event.clientX, event.clientY);
     const base = edge.via ?? { x: 0, y: 0 };
@@ -754,6 +1172,7 @@ class Viewer implements ViewerHandle {
         y: Math.round(origin.y + (p.y - start.y)),
       };
       this.refreshEdge(edge);
+      this.refreshEdgePaths();
       this.refreshBendHandle();
     };
 
@@ -766,6 +1185,63 @@ class Viewer implements ViewerHandle {
 
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+  }
+
+  /** Rebuild every edge path; hops depend on where edges cross each other. */
+  private refreshEdgePaths(): void {
+    if (!this.viewDoc) return;
+    if (this.routeStyle === "orthogonal") {
+      const obstacles = this.collectObstacles();
+      const routes = this.buildOrthogonalRoutes(obstacles.routes, obstacles.soft);
+      const hops = computePolylineHops(this.viewDoc.edges, routes);
+      for (const edge of this.viewDoc.edges) {
+        const els = this.edgeEls.get(edge.id);
+        const route = routes.get(edge.id);
+        if (!els || !route) continue;
+        const d = polylinePath(route.points, hops.get(edge.id));
+        els.line.setAttribute("d", d);
+        els.hit.setAttribute("d", d);
+        this.placeEdgeLabel(edge, pathMetrics(route.points));
+      }
+      return;
+    }
+    const geos = new Map<string, EdgeGeometry>();
+    for (const edge of this.viewDoc.edges) {
+      const geo = this.edgeGeometryOf(edge);
+      if (geo) geos.set(edge.id, geo);
+    }
+    const hops = computeHops(this.viewDoc.edges, geos);
+    for (const edge of this.viewDoc.edges) {
+      const els = this.edgeEls.get(edge.id);
+      const geo = geos.get(edge.id);
+      if (!els || !geo) continue;
+      const d = edgePath(geo, hops.get(edge.id));
+      els.line.setAttribute("d", d);
+      els.hit.setAttribute("d", d);
+    }
+  }
+
+  private placeEdgeLabel(edge: EdgeDecl, path: PolyPath): void {
+    const els = this.edgeEls.get(edge.id);
+    if (!els) return;
+    const family = getComputedStyle(this.root).fontFamily;
+    const font = `500 10.5px ${family}`;
+    const text = truncate(edge.label ?? edge.title ?? "", font, 260);
+    if (!text) return;
+    const width = textWidth(text, font);
+    const t = (edge as EdgeDecl & { __labelT?: number }).__labelT ?? 0.5;
+    const off = (edge as EdgeDecl & { __labelOff?: number }).__labelOff ?? 0;
+    const point = pointAtLength(path, t * path.total);
+    const bg = els.labelLayer.querySelector(".bml-edge-label-bg");
+    const label = els.labelLayer.querySelector(".bml-edge-label");
+    if (bg) {
+      bg.setAttribute("x", String(point.x - width / 2 - 5));
+      bg.setAttribute("y", String(point.y + off - 8.5));
+    }
+    if (label) {
+      label.setAttribute("x", String(point.x));
+      label.setAttribute("y", String(point.y + off + 3.6));
+    }
   }
 
   private refreshEdge(edge: EdgeDecl): void {
@@ -830,10 +1306,15 @@ class Viewer implements ViewerHandle {
     if (next === this.source) return;
     this.source = next;
     this.options.onSourceChange?.(next);
-    const selection = { node: this.selectedNode, edge: this.selectedEdge };
+    const selection = {
+      node: this.selectedNode,
+      nodes: new Set(this.selectedNodes),
+      edge: this.selectedEdge,
+    };
     this.parse(this.source);
     this.render();
     this.selectedNode = selection.node;
+    this.selectedNodes = selection.nodes;
     this.selectedEdge = selection.edge;
     this.applySelection();
     this.refreshBendHandle();
@@ -841,17 +1322,38 @@ class Viewer implements ViewerHandle {
 
   /* ------------------------------------------------------------ selection */
 
-  private selectNode(id: string | null): void {
-    this.selectedNode = id;
-    if (id) this.selectedEdge = null;
+  private selectNode(id: string | null, additive = false): void {
+    if (id === null) {
+      this.selectedNodes.clear();
+      this.selectedNode = null;
+      this.applySelection();
+      if (!this.selectedEdge) this.closeInspector();
+      return;
+    }
+    this.selectedEdge = null;
+    if (additive) {
+      if (this.selectedNodes.has(id)) {
+        this.selectedNodes.delete(id);
+        this.selectedNode = this.selectedNodes.values().next().value ?? null;
+      } else {
+        this.selectedNodes.add(id);
+        this.selectedNode = id;
+      }
+    } else {
+      this.selectedNodes = new Set([id]);
+      this.selectedNode = id;
+    }
     this.applySelection();
-    if (id) this.openNodeInspector(id);
-    else if (!this.selectedEdge) this.closeInspector();
+    if (this.selectedNode) this.openNodeInspector(this.selectedNode);
+    else this.closeInspector();
   }
 
   private selectEdge(id: string | null): void {
     this.selectedEdge = id;
-    if (id) this.selectedNode = null;
+    if (id) {
+      this.selectedNode = null;
+      this.selectedNodes.clear();
+    }
     this.applySelection();
     if (id) this.openEdgeInspector(id);
     else this.closeInspector();
@@ -859,7 +1361,7 @@ class Viewer implements ViewerHandle {
 
   private applySelection(): void {
     for (const [id, node] of this.nodeEls) {
-      node.classList.toggle("bml-selected", id === this.selectedNode);
+      node.classList.toggle("bml-selected", this.selectedNodes.has(id));
     }
     for (const [id, edge] of this.edgeEls) {
       edge.line.parentElement?.classList.toggle("bml-selected", id === this.selectedEdge);
@@ -887,7 +1389,7 @@ class Viewer implements ViewerHandle {
 
   private refreshBendHandle(): void {
     this.overlayLayer.innerHTML = "";
-    if (!this.selectedEdge || !this.doc) return;
+    if (this.routeStyle === "orthogonal" || !this.selectedEdge || !this.doc) return;
     const edge = this.doc.edges.find((e) => e.id === this.selectedEdge);
     if (!edge) return;
     const geo = this.edgeGeometryOf(edge);
@@ -956,7 +1458,11 @@ class Viewer implements ViewerHandle {
     if (edge.note) sections.push(`<h3>说明</h3><p>${escape(edge.note)}</p>`);
     if (edge.src) sections.push(`<h3>出处</h3><p><code>${escape(edge.src)}</code></p>`);
     if (!this.options.readOnly) {
-      sections.push(`<h3>调整走线</h3><p>拖动画布上的圆点改变曲率，坐标会写回文件里的 <code>via</code>。</p>`);
+      sections.push(
+        this.routeStyle === "orthogonal"
+          ? `<h3>走线</h3><p>正交布线由节点位置自动生成（直角折线），拖动节点即可调整。</p>`
+          : `<h3>调整走线</h3><p>拖动画布上的圆点改变曲率，坐标会写回文件里的 <code>via</code>。</p>`,
+      );
     }
 
     this.inspector.innerHTML = `
@@ -1055,6 +1561,9 @@ class Viewer implements ViewerHandle {
     const nodeIds = new Set(this.viewDoc?.nodes.map((node) => node.id) ?? []);
     const edgeIds = new Set(this.viewDoc?.edges.map((edge) => edge.id) ?? []);
     if (this.hoveredNode && !nodeIds.has(this.hoveredNode)) this.hoveredNode = null;
+    for (const id of [...this.selectedNodes]) {
+      if (!nodeIds.has(id)) this.selectedNodes.delete(id);
+    }
     if (this.selectedNode && !nodeIds.has(this.selectedNode)) {
       this.selectedNode = null;
       this.closeInspector();
@@ -1247,6 +1756,21 @@ interface PlacedLabel {
   rect: Rect;
 }
 
+function rectOverlapArea(a: Rect, b: Rect, pad: number): number {
+  const x0 = Math.max(a.x, b.x - pad);
+  const y0 = Math.max(a.y, b.y - pad);
+  const x1 = Math.min(a.x + a.w, b.x + b.w + pad);
+  const y1 = Math.min(a.y + a.h, b.y + b.h + pad);
+  return Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
+}
+
+function labelPenalty(rect: Rect, obstacles: Rect[], placed: Rect[]): number {
+  let penalty = 0;
+  for (const o of obstacles) penalty += rectOverlapArea(rect, o, 1) * 4;
+  for (const o of placed) penalty += rectOverlapArea(rect, o, 4);
+  return penalty;
+}
+
 function placeLabel(
   geo: EdgeGeometry,
   width: number,
@@ -1256,15 +1780,21 @@ function placeLabel(
 ): PlacedLabel {
   const ts = [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74, 0.18, 0.82];
   const offsets = [0, -15, 15, -30, 30, -46, 46, -64, 64];
+  let best: PlacedLabel | null = null;
+  let bestPenalty = Infinity;
   for (const offset of offsets) {
     for (const t of ts) {
       const point = bezierAt(geo.p1, geo.control, geo.p2, t);
       const rect: Rect = { x: point.x - width / 2 - 5, y: point.y - height / 2 + offset, w: width + 10, h: height };
-      let blocked = obstacles.some((o) => rectsHit(rect, o, 1));
-      if (!blocked) blocked = placed.some((o) => rectsHit(rect, o, 1));
-      if (!blocked) return { x: point.x, y: point.y + offset, t, offset, rect };
+      const penalty = labelPenalty(rect, obstacles, placed);
+      if (penalty === 0) return { x: point.x, y: point.y + offset, t, offset, rect };
+      if (penalty < bestPenalty) {
+        bestPenalty = penalty;
+        best = { x: point.x, y: point.y + offset, t, offset, rect };
+      }
     }
   }
+  if (best) return best;
   const point = bezierAt(geo.p1, geo.control, geo.p2, 0.5);
   return {
     x: point.x,
@@ -1277,6 +1807,453 @@ function placeLabel(
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+/* ------------------------------------------------------------ wire hops */
+
+const HOP_RADIUS = 9;
+const HOP_MIN_T = 0.05;
+const HOP_MAX_T = 0.95;
+
+function splitQuad(
+  p1: Point,
+  c: Point,
+  p2: Point,
+  t: number,
+): { left: [Point, Point, Point]; right: [Point, Point, Point] } {
+  const lerp = (a: Point, b: Point): Point => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+  const p01 = lerp(p1, c);
+  const p12 = lerp(c, p2);
+  const p012 = lerp(p01, p12);
+  return { left: [p1, p01, p012], right: [p012, p12, p2] };
+}
+
+/** Sub-curve of a quadratic between parameters t0 and t1. */
+function subQuad(p1: Point, c: Point, p2: Point, t0: number, t1: number): [Point, Point, Point] {
+  const { left } = splitQuad(p1, c, p2, t1);
+  const k = t1 <= 0 ? 0 : t0 / t1;
+  const { right } = splitQuad(left[0], left[1], left[2], k);
+  return right;
+}
+
+function quadSpeed(geo: EdgeGeometry, t: number): number {
+  const dx = 2 * (1 - t) * (geo.control.x - geo.p1.x) + 2 * t * (geo.p2.x - geo.control.x);
+  const dy = 2 * (1 - t) * (geo.control.y - geo.p1.y) + 2 * t * (geo.p2.y - geo.control.y);
+  return Math.hypot(dx, dy);
+}
+
+interface EdgeSamples {
+  points: Point[];
+  box: Rect;
+}
+
+function sampleEdge(geo: EdgeGeometry, steps = 40): EdgeSamples {
+  const points: Point[] = [];
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0; i <= steps; i++) {
+    const p = bezierAt(geo.p1, geo.control, geo.p2, i / steps);
+    points.push(p);
+    x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y);
+    x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y);
+  }
+  return { points, box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } };
+}
+
+function segmentHit(a1: Point, a2: Point, b1: Point, b2: Point): number | null {
+  const ax = a2.x - a1.x, ay = a2.y - a1.y;
+  const bx = b2.x - b1.x, by = b2.y - b1.y;
+  const denom = ax * by - ay * bx;
+  if (Math.abs(denom) < 1e-9) return null;
+  const ox = b1.x - a1.x, oy = b1.y - a1.y;
+  const ua = (ox * by - oy * bx) / denom;
+  const ub = (ox * ay - oy * ax) / denom;
+  if (ua <= 0 || ua >= 1 || ub <= 0 || ub >= 1) return null;
+  return ub;
+}
+
+/**
+ * For every crossing between two edges, the edge drawn later (the one on top)
+ * gets a hop. Returns hop parameters per edge id.
+ */
+function computeHops(edges: EdgeDecl[], geos: Map<string, EdgeGeometry>): Map<string, number[]> {
+  const samples = new Map<string, EdgeSamples>();
+  for (const edge of edges) {
+    const geo = geos.get(edge.id);
+    if (geo) samples.set(edge.id, sampleEdge(geo));
+  }
+  const hops = new Map<string, number[]>();
+  for (let i = 0; i < edges.length; i++) {
+    const first = edges[i]!;
+    const a = samples.get(first.id);
+    if (!a) continue;
+    for (let j = i + 1; j < edges.length; j++) {
+      const second = edges[j]!;
+      const b = samples.get(second.id);
+      if (!b) continue;
+      if (
+        a.box.x + a.box.w < b.box.x || b.box.x + b.box.w < a.box.x ||
+        a.box.y + a.box.h < b.box.y || b.box.y + b.box.h < a.box.y
+      ) continue;
+      const shares =
+        first.from === second.from || first.from === second.to ||
+        first.to === second.from || first.to === second.to;
+      const found: number[] = [];
+      for (let s = 0; s < a.points.length - 1; s++) {
+        for (let k = 0; k < b.points.length - 1; k++) {
+          const ub = segmentHit(a.points[s]!, a.points[s + 1]!, b.points[k]!, b.points[k + 1]!);
+          if (ub === null) continue;
+          const t = (k + ub) / (b.points.length - 1);
+          if (shares && (t < 0.12 || t > 0.88)) continue;
+          found.push(t);
+        }
+      }
+      if (found.length) hops.set(second.id, [...(hops.get(second.id) ?? []), ...found]);
+    }
+  }
+  return hops;
+}
+
+/** Edge path with a small arc where this (top) edge crosses another one. */
+function edgePath(geo: EdgeGeometry, hops?: number[]): string {
+  if (!hops?.length) return pathOf(geo);
+  const usable: number[] = [];
+  for (const t of [...hops].sort((a, b) => a - b)) {
+    if (t < HOP_MIN_T || t > HOP_MAX_T) continue;
+    const p = bezierAt(geo.p1, geo.control, geo.p2, t);
+    if (Math.hypot(p.x - geo.p1.x, p.y - geo.p1.y) < 22) continue;
+    if (Math.hypot(p.x - geo.p2.x, p.y - geo.p2.y) < 22) continue;
+    if (usable.length) {
+      const prev = bezierAt(geo.p1, geo.control, geo.p2, usable[usable.length - 1]!);
+      if (Math.hypot(p.x - prev.x, p.y - prev.y) < 18) continue;
+    }
+    usable.push(t);
+  }
+  if (!usable.length) return pathOf(geo);
+
+  const f = (n: number) => Number(n.toFixed(2));
+  const pointAt = (t: number) => bezierAt(geo.p1, geo.control, geo.p2, t);
+  let d = "";
+  let cursor = 0;
+  for (const t of usable) {
+    const half = Math.min(0.06, 7 / Math.max(quadSpeed(geo, t), 0.001));
+    const t0 = Math.max(cursor, t - half);
+    const t1 = Math.min(1, t + half);
+    if (t1 - t0 < 0.004) continue;
+    const [s0, s1, s2] = subQuad(geo.p1, geo.control, geo.p2, cursor, t0);
+    d += d
+      ? ` Q ${f(s1.x)} ${f(s1.y)} ${f(s2.x)} ${f(s2.y)}`
+      : `M ${f(s0.x)} ${f(s0.y)} Q ${f(s1.x)} ${f(s1.y)} ${f(s2.x)} ${f(s2.y)}`;
+    const b = pointAt(t1);
+    d += ` A ${HOP_RADIUS} ${HOP_RADIUS} 0 0 1 ${f(b.x)} ${f(b.y)}`;
+    cursor = t1;
+  }
+  const [, e1, e2] = subQuad(geo.p1, geo.control, geo.p2, cursor, 1);
+  return `${d} Q ${f(e1.x)} ${f(e1.y)} ${f(e2.x)} ${f(e2.y)}`;
+}
+
+/* --------------------------------------------------- orthogonal polylines */
+
+interface PolyPath {
+  points: Point[];
+  lengths: number[];
+  total: number;
+}
+
+function pathMetrics(points: Point[]): PolyPath {
+  const lengths = [0];
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1]!;
+    const b = points[i]!;
+    total += Math.hypot(b.x - a.x, b.y - a.y);
+    lengths.push(total);
+  }
+  return { points, lengths, total };
+}
+
+function pointAtLength(path: PolyPath, distance: number): Point {
+  const s = Math.max(0, Math.min(path.total, distance));
+  for (let i = 1; i < path.points.length; i++) {
+    if (path.lengths[i]! >= s) {
+      const segStart = path.lengths[i - 1]!;
+      const k = (s - segStart) / Math.max(path.lengths[i]! - segStart, 1e-6);
+      const a = path.points[i - 1]!;
+      const b = path.points[i]!;
+      return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
+    }
+  }
+  return path.points[path.points.length - 1]!;
+}
+
+const CORNER_RADIUS = 12;
+
+function polylinePath(points: Point[], hops?: number[]): string {
+  const f = (n: number) => Number(n.toFixed(2));
+  if (points.length < 2) return "";
+  const path = pathMetrics(points);
+  // Round each bend; a corner never eats more than half of either neighbour, so
+  // narrow lane jogs stay smooth instead of turning into spikes.
+  const radiusAt = (index: number): number => {
+    if (index <= 0 || index >= points.length - 1) return 0;
+    const prev = path.lengths[index]! - path.lengths[index - 1]!;
+    const next = path.lengths[index + 1]! - path.lengths[index]!;
+    if (prev < 2 || next < 2) return 0;
+    return Math.min(CORNER_RADIUS, prev / 2, next / 2);
+  };
+  const at = (distance: number): Point => {
+    const s = Math.max(0, Math.min(path.total, distance));
+    for (let i = 1; i < points.length; i++) {
+      const end = path.lengths[i]!;
+      if (end >= s - 1e-6) {
+        const a = points[i - 1]!;
+        const b = points[i]!;
+        const len = end - path.lengths[i - 1]!;
+        const k = len < 1e-6 ? 0 : (s - path.lengths[i - 1]!) / len;
+        return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
+      }
+    }
+    return points[points.length - 1]!;
+  };
+
+  const cuts: number[] = [];
+  if (hops?.length) {
+    for (const t of [...hops].sort((a, b) => a - b)) {
+      const s = t * path.total;
+      if (s < 22 || s > path.total - 22) continue;
+      if (cuts.length && s - cuts[cuts.length - 1]! < 18) continue;
+      cuts.push(s);
+    }
+  }
+
+  let d = `M ${f(points[0]!.x)} ${f(points[0]!.y)}`;
+  let cut = 0;
+  for (let i = 1; i < points.length; i++) {
+    const segStart = path.lengths[i - 1]!;
+    const segEnd = path.lengths[i]!;
+    const endR = radiusAt(i);
+    while (cut < cuts.length && cuts[cut]! <= segEnd) {
+      const s = cuts[cut]!;
+      if (s >= segStart + radiusAt(i - 1) + 9 && s <= segEnd - endR - 9) {
+        const from = at(s - 7);
+        const to = at(s + 7);
+        d += ` L ${f(from.x)} ${f(from.y)} A 7 7 0 0 1 ${f(to.x)} ${f(to.y)}`;
+      }
+      cut++;
+    }
+    const end = at(segEnd - endR);
+    d += ` L ${f(end.x)} ${f(end.y)}`;
+    if (endR > 0) {
+      const corner = points[i]!;
+      const after = at(segEnd + endR);
+      d += ` Q ${f(corner.x)} ${f(corner.y)} ${f(after.x)} ${f(after.y)}`;
+    }
+  }
+  return d;
+}
+
+function computePolylineHops(
+  edges: EdgeDecl[],
+  routes: Map<string, OrthogonalRoute>,
+): Map<string, number[]> {
+  const paths = new Map<string, PolyPath>();
+  for (const edge of edges) {
+    const route = routes.get(edge.id);
+    if (route) paths.set(edge.id, pathMetrics(route.points));
+  }
+  const hops = new Map<string, number[]>();
+  for (let i = 0; i < edges.length; i++) {
+    const first = edges[i]!;
+    const a = paths.get(first.id);
+    if (!a) continue;
+    for (let j = i + 1; j < edges.length; j++) {
+      const second = edges[j]!;
+      const b = paths.get(second.id);
+      if (!b) continue;
+      const shares =
+        first.from === second.from || first.from === second.to ||
+        first.to === second.from || first.to === second.to;
+      const found: number[] = [];
+      for (let s = 0; s < a.points.length - 1; s++) {
+        for (let k = 0; k < b.points.length - 1; k++) {
+          const ub = segmentHit(a.points[s]!, a.points[s + 1]!, b.points[k]!, b.points[k + 1]!);
+          if (ub === null) continue;
+          const distance = b.lengths[k]! + ub * (b.lengths[k + 1]! - b.lengths[k]!);
+          const t = b.total ? distance / b.total : 0;
+          if (t < HOP_MIN_T || t > HOP_MAX_T) continue;
+          if (shares && (t < 0.12 || t > 0.88)) continue;
+          found.push(t);
+        }
+      }
+      if (found.length) hops.set(second.id, [...(hops.get(second.id) ?? []), ...found]);
+    }
+  }
+  return hops;
+}
+
+function segmentOverlapLength(a1: Point, a2: Point, b1: Point, b2: Point): number {
+  const aHorizontal = Math.abs(a1.y - a2.y) < 0.5;
+  const bHorizontal = Math.abs(b1.y - b2.y) < 0.5;
+  if (aHorizontal !== bHorizontal) return 0;
+  // Lines less than 8px apart read as a single thick stroke, so treat them
+  // as overlapping rather than as two clean parallel runs.
+  if (aHorizontal) {
+    if (Math.abs(a1.y - b1.y) > 8) return 0;
+    return (
+      Math.min(Math.max(a1.x, a2.x), Math.max(b1.x, b2.x)) -
+      Math.max(Math.min(a1.x, a2.x), Math.min(b1.x, b2.x))
+    );
+  }
+  if (Math.abs(a1.x - b1.x) > 8) return 0;
+  return (
+    Math.min(Math.max(a1.y, a2.y), Math.max(b1.y, b2.y)) -
+    Math.max(Math.min(a1.y, a2.y), Math.min(b1.y, b2.y))
+  );
+}
+
+/**
+ * Collinear overlap between two routes. `skipAxis` ignores runs that lie on
+ * the shared node port's axis: edges meeting one port are meant to merge along
+ * that axis, while perpendicular parallel runs must still be separated.
+ */
+function overlapLength(a: Point[], b: Point[], skipAxis?: "h" | "v"): number {
+  let total = 0;
+  for (let i = 0; i < a.length - 1; i++) {
+    const horizontal = Math.abs(a[i]!.y - a[i + 1]!.y) < 0.5;
+    if (skipAxis === (horizontal ? "h" : "v")) continue;
+    for (let j = 0; j < b.length - 1; j++) {
+      const overlap = segmentOverlapLength(a[i]!, a[i + 1]!, b[j]!, b[j + 1]!);
+      if (overlap > 1) total += overlap;
+    }
+  }
+  return total;
+}
+
+/**
+ * Length of two routes running side by side but a few pixels apart. That reads
+ * as a doubled stroke, so lanes should pull such pairs apart.
+ */
+function nearParallelLength(a: Point[], b: Point[], skipAxis?: "h" | "v"): number {
+  let total = 0;
+  for (let i = 0; i < a.length - 1; i++) {
+    const aHoriz = Math.abs(a[i]!.y - a[i + 1]!.y) < 0.5;
+    if (skipAxis === (aHoriz ? "h" : "v")) continue;
+    const aLow = Math.min(aHoriz ? a[i]!.x : a[i]!.y, aHoriz ? a[i + 1]!.x : a[i + 1]!.y);
+    const aHigh = Math.max(aHoriz ? a[i]!.x : a[i]!.y, aHoriz ? a[i + 1]!.x : a[i + 1]!.y);
+    for (let j = 0; j < b.length - 1; j++) {
+      const bHoriz = Math.abs(b[j]!.y - b[j + 1]!.y) < 0.5;
+      if (aHoriz !== bHoriz) continue;
+      const dist = Math.abs(aHoriz ? a[i]!.y - b[j]!.y : a[i]!.x - b[j]!.x);
+      if (dist <= 0.8 || dist >= 11) continue;
+      const bLow = Math.min(bHoriz ? b[j]!.x : b[j]!.y, bHoriz ? b[j + 1]!.x : b[j + 1]!.y);
+      const bHigh = Math.max(bHoriz ? b[j]!.x : b[j]!.y, bHoriz ? b[j + 1]!.x : b[j + 1]!.y);
+      const overlap = Math.min(aHigh, bHigh) - Math.max(aLow, bLow);
+      if (overlap > 20) total += overlap;
+    }
+  }
+  return total;
+}
+
+/** The node port two routes share, with the axis of the run that leaves it. */
+function sharedPort(a: Point[], b: Point[]): { axis: "h" | "v" } | null {
+  const same = (p: Point, q: Point) => Math.abs(p.x - q.x) < 0.5 && Math.abs(p.y - q.y) < 0.5;
+  const orient = (route: Point[], point: Point): "h" | "v" | null => {
+    const n = route.length;
+    if (n < 2) return null;
+    const first = route[0]!;
+    const second = route[1]!;
+    if (same(first, point)) return Math.abs(first.y - second.y) < 0.5 ? "h" : "v";
+    const last = route[n - 1]!;
+    const prev = route[n - 2]!;
+    if (same(last, point)) return Math.abs(last.y - prev.y) < 0.5 ? "h" : "v";
+    return null;
+  };
+  for (const pa of [a[0]!, a[a.length - 1]!]) {
+    for (const pb of [b[0]!, b[b.length - 1]!]) {
+      if (!same(pa, pb)) continue;
+      const axis = orient(a, pa) ?? orient(b, pb);
+      if (axis) return { axis };
+    }
+  }
+  return null;
+}
+
+function placeLabelOnPath(
+  path: PolyPath,
+  width: number,
+  height: number,
+  obstacles: Rect[],
+  placed: Rect[],
+  range?: [number, number],
+  avoid?: boolean[],
+): PlacedLabel {
+  const candidates: { t: number; offset: number }[] = [];
+  const seen = new Set<string>();
+  const push = (t: number, offset: number) => {
+    const key = `${t.toFixed(3)}:${offset}`;
+    if (!t || t <= 0 || t >= 1 || seen.has(key)) return;
+    seen.add(key);
+    candidates.push({ t, offset });
+  };
+  const inRange = (t: number) => !range || (t >= range[0] && t <= range[1]);
+  // The pill is as wide as the label, so check the whole span it covers, not
+  // just the anchor point.
+  const pad = (width / 2 + 6) / Math.max(1, path.total);
+  const avoided = (t: number) => {
+    if (!avoid) return false;
+    const last = avoid.length - 1;
+    const lo = Math.max(0, Math.round((t - pad) * last));
+    const hi = Math.min(last, Math.round((t + pad) * last));
+    for (let i = lo; i <= hi; i++) if (avoid[i]) return true;
+    return false;
+  };
+  // Straight runs read best: try the middle of the longest ones first, sitting
+  // the label just above the line (or just below when above is taken).
+  const runs: { t: number; length: number; horizontal: boolean }[] = [];
+  for (let i = 0; i < path.points.length - 1; i++) {
+    const a = path.points[i]!;
+    const b = path.points[i + 1]!;
+    const length = Math.hypot(b.x - a.x, b.y - a.y);
+    if (length < width + 18) continue;
+    const mid = path.lengths[i]! + length / 2;
+    runs.push({ t: path.total ? mid / path.total : 0, length, horizontal: Math.abs(a.y - b.y) < 0.5 });
+  }
+  runs.sort((a, b) => Number(b.horizontal) - Number(a.horizontal) || b.length - a.length);
+  for (const run of runs) {
+    if (!inRange(run.t) || avoided(run.t)) continue;
+    push(run.t, -12);
+    push(run.t, 14);
+  }
+  const ts = [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74, 0.18, 0.82];
+  const offsets = [0, -15, 15, -30, 30, -46, 46, -64, 64];
+  for (const offset of offsets) for (const t of ts) if (inRange(t) && !avoided(t)) push(t, offset);
+  if (!candidates.length) for (const offset of offsets) for (const t of ts) if (inRange(t)) push(t, offset);
+  if (!candidates.length) for (const offset of offsets) for (const t of ts) push(t, offset);
+  let best: PlacedLabel | null = null;
+  let bestPenalty = Infinity;
+  for (const { t, offset } of candidates) {
+    const point = pointAtLength(path, t * path.total);
+    const rect: Rect = {
+      x: point.x - width / 2 - 5,
+      y: point.y - height / 2 + offset,
+      w: width + 10,
+      h: height,
+    };
+    const penalty = labelPenalty(rect, obstacles, placed);
+    if (penalty === 0) return { x: point.x, y: point.y + offset, t, offset, rect };
+    if (penalty < bestPenalty) {
+      bestPenalty = penalty;
+      best = { x: point.x, y: point.y + offset, t, offset, rect };
+    }
+  }
+  if (best) return best;
+  const point = pointAtLength(path, path.total * 0.5);
+  return {
+    x: point.x,
+    y: point.y,
+    t: 0.5,
+    offset: 0,
+    rect: { x: point.x - width / 2 - 5, y: point.y - height / 2, w: width + 10, h: height },
+  };
 }
 
 function escape(text: string): string {

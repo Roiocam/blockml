@@ -181,7 +181,7 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@blockml/viewer':
+      '@block-ml/viewer':
         specifier: workspace:*
         version: link:../../packages/viewer
       '@tauri-apps/api':
@@ -203,10 +203,10 @@ importers:
 
   packages/cli:
     dependencies:
-      '@blockml/core':
+      '@block-ml/core':
         specifier: workspace:*
         version: link:../core
-      '@blockml/viewer':
+      '@block-ml/viewer':
         specifier: workspace:*
         version: link:../viewer
 
@@ -214,7 +214,7 @@ importers:
 
   packages/viewer:
     dependencies:
-      '@blockml/core':
+      '@block-ml/core':
         specifier: workspace:*
         version: link:../core
 

@@ -1,8 +1,13 @@
 {
-  "name": "@blockml/cli",
-  "version": "0.1.0",
+  "name": "@block-ml/cli",
+  "version": "0.2.0",
   "description": "BlockML command line: validate, render, fmt",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Roiocam/blockml.git",
+    "directory": "packages/cli"
+  },
   "type": "module",
   "bin": {
     "blockml": "./bin.mjs"
@@ -12,7 +17,10 @@
   },
   "files": ["dist", "bin.mjs"],
   "dependencies": {
-    "@blockml/core": "workspace:*",
-    "@blockml/viewer": "workspace:*"
+    "@block-ml/core": "workspace:*",
+    "@block-ml/viewer": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

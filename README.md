@@ -42,7 +42,7 @@ node packages/cli/bin.mjs validate examples/order-platform.blockml
 node packages/cli/bin.mjs render examples/order-platform.blockml -o out/order-platform.html
 ```
 
-产物是一个自包含 HTML：内联 CSS 和 JS、零外部依赖、内网双击即看。画布上可以直接拖节点、拖连线控制点；悬停或选中节点会高亮与它相连的边；顶部下拉可以在四种排列算法之间切换；每个分组框右上角可以折叠成带计数的胶囊，「图层」面板能逐个隐藏分组或节点（只影响视图，不改源码）；改完点「下载源码」拿回带坐标的 `.blockml`。
+产物是一个自包含 HTML：内联 CSS 和 JS、零外部依赖、内网双击即看。画布上可以直接拖节点、拖连线控制点，按住 Shift / Ctrl 点选多个节点后可以整组拖动；两条线交叉时上层连线在交点画一个小圆弧跳过下层；正交走线里每个节点每条边只有一个吸附点（边框中点），线从这里出发再分车道；diagram 里写 `route: orthogonal` 可以切换成 draw.io 式的正交走线（圆角转折、跨线跳弧，默认 `curve` 贝塞尔）；悬停或选中节点会高亮与它相连的边；顶部下拉可以在四种排列算法之间切换；每个分组框右上角可以折叠成带计数的胶囊，「图层」面板能逐个隐藏分组或节点（只影响视图，不改源码）；改完点「下载源码」拿回带坐标的 `.blockml`。
 
 仓库里有一份渲染好的示例：[`examples/order-platform.html`](examples/order-platform.html)（虚构的电商订单平台，源码同名 `.blockml`）。
 
@@ -54,11 +54,28 @@ node packages/cli/bin.mjs render examples/order-platform.blockml -o out/order-pl
 
 ```bash
 pnpm install
-pnpm --filter @blockml/desktop tauri dev     # 本机窗口里开发
-pnpm --filter @blockml/desktop tauri build   # 打包到 apps/desktop/src-tauri/target/release/bundle/
+pnpm --filter @block-ml/desktop tauri dev     # 本机窗口里开发
+pnpm --filter @block-ml/desktop tauri build   # 打包到 apps/desktop/src-tauri/target/release/bundle/
 ```
 
-产物按平台生成：macOS `.app` / `.dmg`、Windows `.msi` / `.exe`、Linux `.AppImage` / `.deb`（在对应系统上构建）。推送 `v*` tag 会触发 `.github/workflows/desktop.yml` 构建三平台安装包并自动发布到 GitHub Releases。本地构建未签名，对外分发需要自行签名 / 公证。
+产物按平台生成：macOS `.app` / `.dmg`、Windows `.msi` / `.exe`、Linux `.AppImage` / `.deb`（在对应系统上构建）。本地构建未签名，对外分发需要自行签名 / 公证。
+
+## 发布
+
+推送 `v*` tag 触发两条流水线：
+
+| 工作流 | 产物 |
+| --- | --- |
+| `.github/workflows/desktop.yml` | 三平台桌面安装包 + GitHub Release |
+| `.github/workflows/npm.yml` | npm 包 `@block-ml/core`、`@block-ml/viewer`、`@block-ml/cli`（带 provenance） |
+
+发布前要求：
+
+- tag 与根 `package.json` 的 `version` 一致（`v0.2.0` ↔ `0.2.0`），不一致流水线直接失败。
+- 仓库 secrets 里配置 `NPM_TOKEN`（npm automation token，对 `@block-ml` scope 有发布权限）；npm 上需要已存在 `@block-ml` 组织。
+- 已发布过的版本会跳过，重跑流水线不会因为重复版本失败。
+
+发布后可用 `npm i -g @block-ml/cli` 安装命令行，或 `npx @block-ml/cli render app.blockml` 直接渲染。本地想预演打包内容：`pnpm -r publish --dry-run --no-git-checks`。
 
 ## 语法 30 秒
 
@@ -66,19 +83,20 @@ pnpm --filter @blockml/desktop tauri build   # 打包到 apps/desktop/src-tauri/
 diagram "标题" { title: "…", theme: light }   // 可选
 group <id> "标题" { color: #4f46e5 }
 node  <id> "标题" { group:, kind:, tech:, at: x, y, note:, src: }
-edge  <from> -> <to> "标签" { kind:, via: dx, dy, dash:, note:, src: }
+edge  <from> -> <to> "标签" { kind:, via: dx, dy, dash:, bundle:, note:, src: }
 ```
 
 - 没有属性的块可以写成一行，`{ }` 省略。
-- `at` 是节点左上角；`via` 是连线控制点相对两端点中点的偏移。
+- `at` 是节点左上角；`via` 是连线控制点相对两端点中点的偏移（仅 `route: curve` 生效）。
 - 未知 kind 降级 + warning；未知属性警告并忽略；`x-` 前缀字段原样保留。
 - 完整规范：[`spec/blockml-spec-v1.md`](spec/blockml-spec-v1.md)
 
 ## 仓库结构
 
 ```
+CHANGELOG.md                  版本变更记录
 spec/
-  blockml-spec-v1.md          语言规范（normative）
+  blockml-spec-v1.md          语言规范（normative，当前 v1.1）
 examples/
   order-platform.blockml      虚构的电商订单平台（可直接渲染）
   order-platform.html         渲染成品，可双击打开
@@ -93,6 +111,8 @@ skills/
 ```
 
 ## CLI
+
+`npm i -g @block-ml/cli` 装好之后直接跑 `blockml`；不装也能用仓库里的 `node packages/cli/bin.mjs`。
 
 | 命令 | 作用 |
 | --- | --- |

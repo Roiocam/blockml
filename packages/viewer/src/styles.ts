@@ -34,19 +34,20 @@ export const VIEWER_CSS = `
 .bml-grid-dot{fill:var(--bml-grid)}
 .bml-group-box{fill-opacity:.06;stroke-opacity:.3;stroke-width:1.2}
 .bml-group-box.bml-collapsed{fill-opacity:.1;stroke-dasharray:5 4}
-.bml-group-label{font:600 10.5px/1 inherit;letter-spacing:.06em;text-transform:uppercase}
+.bml-group-label{font-weight:600;font-size:10.5px;line-height:1;font-family:inherit;letter-spacing:.06em;text-transform:uppercase}
+.bml-group-label-bg{fill:var(--bml-label-bg)}
 .bml-group-toggle{cursor:pointer}
 .bml-group-toggle circle{stroke-width:1;transition:stroke-opacity .12s ease,fill .12s ease}
 .bml-group-toggle:hover circle{stroke-opacity:.9;fill:var(--bml-bg)}
-.bml-toggle-sign{font:600 12px/1 inherit;pointer-events:none}
+.bml-toggle-sign{font-weight:600;font-size:12px;line-height:1;font-family:inherit;pointer-events:none}
 .bml-node{cursor:grab}
 .bml-node.bml-dragging{cursor:grabbing}
 .bml-node-box{fill:var(--bml-panel);stroke:#dbe2ea;stroke-width:1.2;filter:url(#bml-node-shadow)}
 .bml-root[data-bml-theme="dark"] .bml-node-box{stroke:#243146}
 .bml-node:hover .bml-node-box{stroke:#b9c4d2}
 .bml-node.bml-selected .bml-node-box{stroke:var(--bml-accent);stroke-width:2;filter:url(#bml-node-shadow-sel)}
-.bml-node-title{font:600 13px/1 inherit;fill:var(--bml-ink);pointer-events:none}
-.bml-node-tech{font:400 10.5px/1 inherit;fill:#7c8999;pointer-events:none}
+.bml-node-title{font-weight:600;font-size:13px;line-height:1;font-family:inherit;fill:var(--bml-ink);pointer-events:none}
+.bml-node-tech{font-weight:400;font-size:10.5px;line-height:1;font-family:inherit;fill:#7c8999;pointer-events:none}
 .bml-edge{transition:opacity .12s ease}
 .bml-focusing .bml-edge{opacity:.14}
 .bml-focusing .bml-edge.bml-related{opacity:1}
@@ -56,7 +57,7 @@ export const VIEWER_CSS = `
 .bml-focusing .bml-node:not(.bml-focus-node){opacity:.55}
 .bml-edge-line{fill:none;stroke-width:1.6;pointer-events:none}
 .bml-edge-hit{fill:none;stroke:transparent;stroke-width:16;cursor:pointer}
-.bml-edge-label{font:500 10.5px/1 inherit;fill:#5c6b7f;pointer-events:none}
+.bml-edge-label{font-weight:500;font-size:10.5px;line-height:1;font-family:inherit;fill:#5c6b7f;pointer-events:none}
 .bml-root[data-bml-theme="dark"] .bml-edge-label{fill:#93a3b8}
 .bml-edge-label-bg{fill:var(--bml-label-bg);pointer-events:none}
 .bml-edge.bml-selected .bml-edge-line{stroke-width:2.6}
@@ -132,7 +133,7 @@ export const VIEWER_CSS = `
 .bml-layer-node .bml-layer-name{font:400 11.5px/1.3 ui-monospace,monospace;color:var(--bml-ink-2)}
 .bml-layer-fold{
   border:1px solid var(--bml-line);background:transparent;color:var(--bml-ink-3);
-  font:500 10.5px/1 inherit;padding:3px 7px;border-radius:5px;cursor:pointer;
+  font-weight:500;font-size:10.5px;line-height:1;font-family:inherit;padding:3px 7px;border-radius:5px;cursor:pointer;
 }
 .bml-layer-fold:hover{color:var(--bml-ink);border-color:var(--bml-ink-3)}
 .bml-layers-foot{
@@ -141,7 +142,7 @@ export const VIEWER_CSS = `
 }
 .bml-layers-foot button{
   border:1px solid var(--bml-line);background:transparent;color:var(--bml-ink-2);
-  font:500 10.5px/1 inherit;padding:4px 8px;border-radius:5px;cursor:pointer;
+  font-weight:500;font-size:10.5px;line-height:1;font-family:inherit;padding:4px 8px;border-radius:5px;cursor:pointer;
 }
 .bml-layers-foot button:hover{border-color:var(--bml-ink-3);color:var(--bml-ink)}
 .bml-error{

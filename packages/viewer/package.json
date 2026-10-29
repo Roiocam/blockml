@@ -1,8 +1,13 @@
 {
-  "name": "@blockml/viewer",
-  "version": "0.1.0",
+  "name": "@block-ml/viewer",
+  "version": "0.2.0",
   "description": "Interactive BlockML canvas: render, drag, export",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Roiocam/blockml.git",
+    "directory": "packages/viewer"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -14,8 +19,11 @@
     "./iife": "./dist/viewer.iife.js",
     "./styles.css": "./dist/styles.css"
   },
-  "files": ["dist"],
+  "files": ["dist", "src"],
   "dependencies": {
-    "@blockml/core": "workspace:*"
+    "@block-ml/core": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

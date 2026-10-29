@@ -53,6 +53,7 @@ function edgeLines(edge: EdgeDecl): string[] {
   props.push(`kind: ${edge.kind}`);
   if (edge.via && (edge.via.x !== 0 || edge.via.y !== 0)) props.push(`via: ${pair(edge.via)}`);
   if (edge.dash !== null) props.push(`dash: ${edge.dash}`);
+  if (edge.bundle) props.push(`bundle: ${/^[A-Za-z_][\w.-]*$/.test(edge.bundle) ? edge.bundle : quote(edge.bundle)}`);
   if (edge.note) props.push(`note: ${quote(edge.note)}`);
   if (edge.src) props.push(`src: ${quote(edge.src)}`);
   for (const [key, value] of Object.entries(edge.extra)) {
@@ -95,6 +96,7 @@ export function serialize(doc: BlockDocument): string {
     if (diagram.subtitle) props.push(`subtitle: ${quote(diagram.subtitle)}`);
     if (diagram.theme !== "light") props.push(`theme: ${diagram.theme}`);
     if (diagram.direction !== "TB") props.push(`direction: ${diagram.direction}`);
+    if (diagram.route !== "curve") props.push(`route: ${diagram.route}`);
     if (diagram.version !== "1.0") props.push(`version: ${quote(diagram.version)}`);
     for (const [key, value] of Object.entries(diagram.extra)) {
       props.push(`${key}: ${serializeExtra(value)}`);

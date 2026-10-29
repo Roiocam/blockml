@@ -33,7 +33,7 @@ async function buildViewer() {
     entryPoints: [resolve(root, "packages/viewer/src/index.ts")],
     outfile: resolve(root, "packages/viewer/dist/index.js"),
     format: "esm",
-    external: ["@blockml/core"],
+    external: ["@block-ml/core"],
   });
 
   await build({

@@ -8,6 +8,7 @@ import type {
   NodeDecl,
   ParseResult,
   Point,
+  RouteStyle,
   ThemeName,
   Direction,
 } from "./ast.js";
@@ -32,9 +33,9 @@ type Value =
   | { type: "list"; value: Value[]; line: number };
 
 const NODE_ATTRS = new Set(["group", "kind", "label", "tech", "at", "note", "src", "tags"]);
-const EDGE_ATTRS = new Set(["kind", "label", "via", "dash", "note", "src"]);
+const EDGE_ATTRS = new Set(["kind", "label", "via", "dash", "bundle", "note", "src"]);
 const GROUP_ATTRS = new Set(["color", "label", "note", "src"]);
-const DIAGRAM_ATTRS = new Set(["title", "subtitle", "theme", "direction", "version"]);
+const DIAGRAM_ATTRS = new Set(["title", "subtitle", "theme", "direction", "route", "version"]);
 
 const COLOR_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
@@ -350,12 +351,14 @@ class Parser {
     const theme: ThemeName = themeRaw === "dark" || themeRaw === "auto" ? themeRaw : "light";
     const directionRaw = (asIdent(props.get("direction")) ?? "TB").toUpperCase();
     const direction: Direction = directionRaw === "LR" ? "LR" : "TB";
+    const route: RouteStyle = asIdent(props.get("route")) === "orthogonal" ? "orthogonal" : "curve";
     return {
       type: "diagram",
       title: asString(props.get("title")) ?? title,
       subtitle: asString(props.get("subtitle")),
       theme,
       direction,
+      route,
       version: asString(props.get("version")) ?? "1.0",
       line: anchor.line,
       extra,
@@ -431,6 +434,7 @@ class Parser {
       this.error("BLK006", "edge.via 必须是 dx, dy 两个数字", { ...from, line: props.get("via")!.line }, "例如 via: -30, 0");
     }
     const dash = asBool(props.get("dash"));
+    const bundle = asString(props.get("bundle")) ?? asIdent(props.get("bundle"));
     return {
       type: "edge",
       id: `e${index + 1}`,
@@ -441,6 +445,7 @@ class Parser {
       kind,
       via,
       dash,
+      bundle,
       note: asString(props.get("note")),
       src: asString(props.get("src")),
       line: from.line,

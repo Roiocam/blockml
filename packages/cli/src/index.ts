@@ -1,9 +1,9 @@
 import { readFile, writeFile, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { basename, dirname, extname, join, resolve } from "node:path";
-import { applyLayout, hasErrors, layoutDocument, parse, serialize, LAYOUT_ALGORITHMS, LAYOUT_LABELS } from "@blockml/core";
-import type { Diagnostic, LayoutAlgorithm } from "@blockml/core";
-import { renderStandaloneHTML, VIEWER_CSS } from "@blockml/viewer";
+import { applyLayout, hasErrors, layoutDocument, parse, serialize, LAYOUT_ALGORITHMS, LAYOUT_LABELS } from "@block-ml/core";
+import type { Diagnostic, LayoutAlgorithm } from "@block-ml/core";
+import { renderStandaloneHTML, VIEWER_CSS } from "@block-ml/viewer";
 
 const require = createRequire(import.meta.url);
 
@@ -128,7 +128,7 @@ async function cmdRender(args: Args): Promise<number> {
     ? resolve(args.out)
     : join(dirname(resolve(file)), basename(file, extname(file)) + ".html");
 
-  const iifePath = require.resolve("@blockml/viewer/iife");
+  const iifePath = require.resolve("@block-ml/viewer/iife");
   const viewerScript = await readFile(iifePath, "utf8");
 
   const html = renderStandaloneHTML({

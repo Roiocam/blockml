@@ -1,8 +1,13 @@
 {
-  "name": "@blockml/core",
-  "version": "0.1.0",
+  "name": "@block-ml/core",
+  "version": "0.2.0",
   "description": "BlockML parser, validator, serializer and geometry helpers",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Roiocam/blockml.git",
+    "directory": "packages/core"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -12,6 +17,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
-  "sideEffects": false
+  "files": ["dist", "src"],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  }
 }

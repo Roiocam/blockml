@@ -6,8 +6,8 @@ export default defineConfig({
   resolve: {
     alias: {
       // Bundle straight from source so the desktop shell and the CLI share one viewer.
-      "@blockml/core": fileURLToPath(new URL("../../packages/core/src/index.ts", import.meta.url)),
-      "@blockml/viewer": fileURLToPath(new URL("../../packages/viewer/src/index.ts", import.meta.url)),
+      "@block-ml/core": fileURLToPath(new URL("../../packages/core/src/index.ts", import.meta.url)),
+      "@block-ml/viewer": fileURLToPath(new URL("../../packages/viewer/src/index.ts", import.meta.url)),
     },
   },
   server: {

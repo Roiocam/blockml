@@ -1,0 +1,61 @@
+name: npm
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # npm provenance
+
+concurrency:
+  group: npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish @block-ml packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+      - name: Check tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag="${TAG_NAME#v}"
+          case "$tag" in
+            *[!0-9.]*|"") echo "unexpected tag name: ${TAG_NAME}" >&2; exit 1 ;;
+          esac
+          if [ "$version" != "$tag" ]; then
+            echo "tag v${tag} does not match package version ${version}" >&2
+            exit 1
+          fi
+
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          for pkg in @block-ml/core @block-ml/viewer @block-ml/cli; do
+            if npm view "${pkg}@${version}" version >/dev/null 2>&1; then
+              echo "skip ${pkg}@${version} (already published)"
+              continue
+            fi
+            pnpm --filter "${pkg}" publish --access public --no-git-checks --provenance
+          done
