@@ -4,3 +4,8 @@ out/
 *.log
 .DS_Store
 .vitest/
+
+# desktop app
+apps/desktop/dist/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/

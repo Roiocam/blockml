@@ -15,7 +15,9 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "example:render": "node packages/cli/bin.mjs render examples/order-platform.blockml -o examples/order-platform.html",
-    "check:examples": "node packages/cli/bin.mjs validate examples/*.blockml skills/blockml/assets/*.blockml"
+    "check:examples": "node packages/cli/bin.mjs validate examples/*.blockml skills/blockml/assets/*.blockml",
+    "desktop:dev": "pnpm --filter @blockml/desktop tauri dev",
+    "desktop:build": "pnpm --filter @blockml/desktop tauri build"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

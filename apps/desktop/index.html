@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BlockML</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <header id="bar">
+    <button id="open" class="btn" title="打开 .blockml（⌘O）">打开</button>
+    <button id="save" class="btn" title="保存（⌘S）">保存</button>
+    <button id="save-as" class="btn ghost" title="另存为（⇧⌘S）">另存为</button>
+    <div class="divider"></div>
+    <span id="file" class="file">未打开文件</span>
+    <span id="status" class="status"></span>
+    <span class="grow"></span>
+    <label class="auto" title="拖动节点后自动写回文件">
+      <input type="checkbox" id="autosave" checked />
+      自动保存
+    </label>
+    <button id="recent" class="btn ghost" title="最近打开">最近</button>
+    <button id="export" class="btn ghost" title="导出">导出</button>
+    <button id="layers" class="btn ghost" title="显示 / 隐藏分组与节点">图层</button>
+    <select id="layout" title="重新排列（会覆盖手工坐标）">
+      <option value="">手工布局</option>
+      <option value="layered">从左到右</option>
+      <option value="pipeline">Pipeline</option>
+      <option value="snowflake">雪花形</option>
+      <option value="compact">紧凑型</option>
+    </select>
+    <button id="fit" class="btn ghost" title="适应窗口（⌘0）">适应窗口</button>
+    <button id="zoom-out" class="btn ghost" title="缩小">−</button>
+    <button id="zoom-in" class="btn ghost" title="放大">＋</button>
+    <button id="theme" class="btn ghost" title="切换主题">深色</button>
+  </header>
+
+  <main id="canvas"></main>
+
+  <div id="empty" class="empty">
+    <div class="empty-card">
+      <h1>BlockML</h1>
+      <p>打开或拖入一个 <code>.blockml</code> 文件开始。</p>
+      <button id="empty-open" class="btn">打开文件…</button>
+      <p class="empty-hint">⌘O 打开 · ⌘S 保存 · 拖入文件可直接打开</p>
+    </div>
+  </div>
+
+  <div id="drop" class="drop hidden">松开以打开 .blockml</div>
+
+  <div id="banner" class="banner hidden">
+    <span id="banner-text"></span>
+    <button id="banner-reload" class="btn small">重新载入</button>
+    <button id="banner-dismiss" class="btn ghost small">忽略</button>
+  </div>
+
+  <div id="recent-menu" class="menu hidden"></div>
+  <div id="export-menu" class="menu hidden">
+    <button data-export="svg">导出 SVG…</button>
+    <button data-export="png">导出 PNG…</button>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

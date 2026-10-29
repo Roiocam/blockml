@@ -12,7 +12,7 @@ group data "数据面" { color: #10b981 }
 node gw "api-gateway" {
   group: access
   kind: service
-  tech: "WebFlux 8088 · 唯一对外边界"
+  tech: "Spring Cloud Gateway · 8080"
   at: 340, 40
   src: "docs/deploy.md:18-20"
 }
@@ -20,7 +20,7 @@ node gw "api-gateway" {
 node pg "PostgreSQL" {
   group: data
   kind: db
-  tech: "agent_session"
+  tech: "orders"
   at: 1180, 260
 }
 
@@ -45,6 +45,20 @@ node packages/cli/bin.mjs render examples/order-platform.blockml -o out/order-pl
 产物是一个自包含 HTML：内联 CSS 和 JS、零外部依赖、内网双击即看。画布上可以直接拖节点、拖连线控制点；悬停或选中节点会高亮与它相连的边；顶部下拉可以在四种排列算法之间切换；每个分组框右上角可以折叠成带计数的胶囊，「图层」面板能逐个隐藏分组或节点（只影响视图，不改源码）；改完点「下载源码」拿回带坐标的 `.blockml`。
 
 仓库里有一份渲染好的示例：[`examples/order-platform.html`](examples/order-platform.html)（虚构的电商订单平台，源码同名 `.blockml`）。
+
+## 桌面阅读器（Tauri）
+
+`apps/desktop` 把同一套 viewer 包成原生应用：系统文件对话框、拖入打开、拖动后自动写回文件、外部修改检测、最近文件、SVG / PNG 导出、深浅主题，并注册 `.blockml` 文件关联（双击直达）。
+
+前置：Node 20+、pnpm、Rust 工具链（`curl https://sh.rustup.rs -sSf | sh`）。
+
+```bash
+pnpm install
+pnpm --filter @blockml/desktop tauri dev     # 本机窗口里开发
+pnpm --filter @blockml/desktop tauri build   # 打包到 apps/desktop/src-tauri/target/release/bundle/
+```
+
+产物按平台生成：macOS `.app` / `.dmg`、Windows `.msi` / `.exe`、Linux `.AppImage` / `.deb`（在对应系统上构建）。推送 `v*` tag 会触发 `.github/workflows/desktop.yml` 构建三平台安装包并自动发布到 GitHub Releases。本地构建未签名，对外分发需要自行签名 / 公证。
 
 ## 语法 30 秒
 
@@ -72,6 +86,8 @@ packages/
   core/                       词法、解析、校验、序列化、几何、坐标回写
   viewer/                     渲染 + 交互 + 单文件导出
   cli/                        blockml validate / render / fmt / inspect
+apps/
+  desktop/                    Tauri 2 桌面阅读器（复用 viewer，注册 .blockml）
 skills/
   blockml/                    给 agent 的写作与自检流程
 ```
@@ -96,13 +112,13 @@ skills/
 
 ## 状态
 
-v0.1 已实现：规范、parser、viewer（四种排列 + 悬停高亮 + 分组折叠 / 图层隐藏）、CLI、agent skill。
+v0.1 已实现：规范、parser、viewer（四种排列 + 悬停高亮 + 分组折叠 / 图层隐藏）、CLI、agent skill、Tauri 桌面阅读器。
 
 路线图：
 
 - [ ] 自定义 kind 样式（`style kind service { color: … }`）
 - [ ] 子图嵌套 / 边链 `a -> b -> c`
-- [ ] 桌面阅读器（Tauri）
+- [x] 桌面阅读器（Tauri，含 `.blockml` 文件关联）
 - [x] 四种排列算法 + 悬停高亮
 - [x] 分组折叠 + 图层隐藏（仅视图，不写回）
 - [ ] npm 发布与 d.ts
