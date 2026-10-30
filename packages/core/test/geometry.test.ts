@@ -5,8 +5,12 @@ import {
   indexPairs,
   orthogonalRoute,
   parse,
+  planSidePorts,
+  portPositions,
   serialize,
+  sidePoint,
   sideRange,
+  snapAlignment,
 } from "../src/index.js";
 
 const source = `node hub "hub" { at: 0, 0 }
@@ -190,5 +194,126 @@ describe("sideRange", () => {
     expect(sideRange(box, "left")).toEqual({ min: 14, max: 48 });
     expect(sideRange(box, "top")).toEqual({ min: 18, max: 182 });
     expect(sideRange(box, "bottom")).toEqual({ min: 18, max: 182 });
+  });
+});
+
+describe("side ports", () => {
+  const box = { x: 300, y: 130, w: 200, h: 62, cx: 400, cy: 161 };
+
+  it("separates inbound and outbound groups on the same border", () => {
+    const ports = planSidePorts(box, "left", [
+      { key: "out", desired: 161 },
+      { key: "in", desired: 161 },
+    ]);
+    const inbound = ports.find((port) => port.key === "in")!;
+    const outbound = ports.find((port) => port.key === "out")!;
+
+    expect(inbound.point.x).toBe(300);
+    expect(outbound.side).toBe("left");
+    // The inbound arrow and the outbound start must not sit on one point.
+    expect(outbound.point).not.toEqual(inbound.point);
+    expect(Math.abs(outbound.point.y - inbound.point.y)).toBeGreaterThanOrEqual(14);
+    expect(inbound.point.y).toBeLessThan(outbound.point.y);
+  });
+
+  it("gives every bundle on a crowded border its own point", () => {
+    const ports = planSidePorts(box, "left", [
+      { key: "in", desired: 161 },
+      { key: "out", desired: 161 },
+      { key: "bundle:http", desired: 161 },
+      { key: "bundle:db", desired: 161 },
+    ]);
+    const range = sideRange(box, "left");
+    expect(new Set(ports.map((port) => port.point.y)).size).toBe(4);
+    for (const port of ports) {
+      expect(port.point.y).toBeGreaterThanOrEqual(range.min - 0.01);
+      expect(port.point.y).toBeLessThanOrEqual(range.max + 0.01);
+    }
+  });
+
+  it("orders groups by their preferred position along the border", () => {
+    const ports = planSidePorts(box, "left", [
+      { key: "out", desired: 178 },
+      { key: "in", desired: 144 },
+    ]);
+    expect(ports.map((port) => port.key)).toEqual(["in", "out"]);
+    expect(ports[0]!.point.y).toBeLessThan(ports[1]!.point.y);
+  });
+
+  it("centers a lone port and spreads wider borders", () => {
+    expect(portPositions(box, "right", 1)).toEqual([161]);
+    const positions = portPositions(box, "bottom", 3);
+    expect(positions).toHaveLength(3);
+    expect(positions[1]).toBe(400);
+    expect(positions[0]!).toBeLessThan(positions[1]!);
+    expect(positions[2]!).toBeGreaterThan(positions[1]!);
+    expect(positions[0]!).toBeGreaterThanOrEqual(318);
+    expect(positions[2]!).toBeLessThanOrEqual(482);
+  });
+
+  it("keeps a point on the border", () => {
+    expect(sidePoint(box, "left", 0)).toEqual({ x: 300, y: 144 });
+    expect(sidePoint(box, "right", 999)).toEqual({ x: 500, y: 178 });
+    expect(sidePoint(box, "top", 0)).toEqual({ x: 318, y: 130 });
+  });
+});
+
+describe("snapAlignment", () => {
+  const moving = [{ x: 100, y: 100, w: 200, h: 62 }];
+
+  it("pulls a border onto a nearby target border and spans every box on the line", () => {
+    const targets = [
+      { x: 320, y: 300, w: 200, h: 62 },
+      { x: 320, y: 500, w: 200, h: 62 },
+    ];
+    const result = snapAlignment(moving, targets, 216, 40, 6);
+    expect(result.dx).toBe(220);
+    expect(result.dy).toBe(40);
+    const guide = result.guides.find((item) => item.axis === "x")!;
+    expect(guide.at).toBe(320);
+    // one rule covers the dragged box (already shifted 40px down) and both
+    // boxes sharing the border
+    expect(guide.from).toBe(130);
+    expect(guide.to).toBe(572);
+  });
+
+  it("aligns centres when that line is closer than any border", () => {
+    const target = { x: 340, y: 300, w: 120, h: 62 };
+    const result = snapAlignment(moving, [target], 200, 0, 6);
+    expect(result.dx).toBe(200);
+    expect(result.guides[0]).toMatchObject({ axis: "x", at: 400 });
+  });
+
+  it("leaves the drag alone when nothing is within reach", () => {
+    const target = { x: 340, y: 300, w: 120, h: 62 };
+    expect(snapAlignment(moving, [target], 210, 100, 6)).toEqual({ dx: 210, dy: 100, guides: [] });
+  });
+
+  it("snaps each axis on its own", () => {
+    const target = { x: 320, y: 300, w: 200, h: 62 };
+    const result = snapAlignment(moving, [target], 216, 196, 6);
+    expect(result.dx).toBe(220);
+    expect(result.dy).toBe(200);
+    expect(result.guides.map((item) => item.axis).sort()).toEqual(["x", "y"]);
+  });
+
+  it("uses the union bounds for a multi-selection", () => {
+    const pair = [
+      { x: 100, y: 100, w: 200, h: 62 },
+      { x: 100, y: 300, w: 200, h: 62 },
+    ];
+    // the pair's joint centre is y = 231; the target's centre is 3px away
+    const target = { x: 400, y: 200, w: 200, h: 62 };
+    const result = snapAlignment(pair, [target], 0, 3, 6);
+    expect(result.dy).toBe(0);
+    const guide = result.guides.find((item) => item.axis === "y")!;
+    expect(guide.at).toBe(231);
+    expect(guide.from).toBe(90);
+  });
+
+  it("never moves boxes when there is no target or no threshold", () => {
+    expect(snapAlignment(moving, [], 7, 9, 6)).toEqual({ dx: 7, dy: 9, guides: [] });
+    expect(snapAlignment(moving, [{ x: 104, y: 100, w: 200, h: 62 }], 0, 0, 0))
+      .toEqual({ dx: 0, dy: 0, guides: [] });
   });
 });

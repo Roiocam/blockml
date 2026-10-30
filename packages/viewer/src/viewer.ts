@@ -19,6 +19,7 @@ import {
   isNodeVisible,
   layoutDocument,
   nodeDisplayName,
+  planSidePorts,
   relatedEdges,
   relatedNodes,
   nodeKindStyle,
@@ -26,13 +27,16 @@ import {
   primarySide,
   resolveVisibility,
   serialize,
+  sideAlong,
   sideMidpoint,
   sideRange,
+  snapAlignment,
   visibleEdges,
   visibleGroups,
   visibleNodes,
   GROUP_HEAD,
   GROUP_PAD,
+  type AlignmentGuide,
   type BlockDocument,
   type Diagnostic,
   type EdgeDecl,
@@ -46,6 +50,7 @@ import {
   type OrthogonalRoute,
   type ParseResult,
   type Point,
+  type PortGroup,
   type Rect,
   type RouteStyle,
   type Visibility,
@@ -53,6 +58,10 @@ import {
 import { VIEWER_CSS } from "./styles.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
+/** Lane offsets tried for orthogonal routes, nearest first. */
+const ORTHO_LANES = [0, 1, -1, 2, -2, 3, -3, 4, -4];
+/** How close (screen px) a dragged border must come to snap onto a guide. */
+const SNAP_RADIUS = 6;
 
 export interface ViewerOptions {
   source: string;
@@ -60,6 +69,11 @@ export interface ViewerOptions {
   theme?: "light" | "dark";
   showLegend?: boolean;
   showInspector?: boolean;
+  /**
+   * Smart guides while dragging: pull a node onto another node's border or
+   * centre line. Defaults to true; hold Alt while dragging to move freely.
+   */
+  snap?: boolean;
   onSourceChange?: (source: string) => void;
   onDiagnostics?: (diagnostics: Diagnostic[]) => void;
   /** Fired whenever a group is collapsed or a group/node is hidden. */
@@ -70,6 +84,15 @@ export interface ViewerVisibility {
   hiddenNodes: string[];
   hiddenGroups: string[];
   collapsedGroups: string[];
+}
+
+interface BundleGroup {
+  name: string;
+  end: "from" | "to";
+  nodeId: string;
+  side: EdgeSide;
+  centroid: Point;
+  edges: EdgeDecl[];
 }
 
 export interface ViewerHandle {
@@ -159,6 +182,8 @@ class Viewer implements ViewerHandle {
   private headerLayer: SVGGElement;
   private labelLayer: SVGGElement;
   private uiLayer: SVGGElement;
+  /** Snap guides, kept above the nodes so a rule reads across every box. */
+  private guideLayer: SVGGElement;
   private overlayLayer: SVGGElement;
   private defs: SVGDefsElement;
   private legend: HTMLElement;
@@ -180,6 +205,7 @@ class Viewer implements ViewerHandle {
   private pointerSelected = false;
   private fans = new Map<string, { from?: number; to?: number }>();
   private bundleOf = new Map<string, string>();
+  private bundleGroups: BundleGroup[] = [];
   private bundleInfo = new Map<
     string,
     { end: "from" | "to"; trunk?: { x?: number; y?: number }; sharedX: number; sharedY: number }
@@ -222,6 +248,7 @@ class Viewer implements ViewerHandle {
     this.nodeLayer = el("g", { class: "bml-nodes" });
     this.labelLayer = el("g", { class: "bml-labels" });
     this.uiLayer = el("g", { class: "bml-ui" });
+    this.guideLayer = el("g", { class: "bml-guides" });
     this.overlayLayer = el("g", { class: "bml-overlay" });
 
     this.svg.appendChild(this.defs);
@@ -231,6 +258,7 @@ class Viewer implements ViewerHandle {
     this.viewport.appendChild(this.nodeLayer);
     this.viewport.appendChild(this.labelLayer);
     this.viewport.appendChild(this.uiLayer);
+    this.viewport.appendChild(this.guideLayer);
     this.viewport.appendChild(this.overlayLayer);
     this.svg.appendChild(this.viewport);
     this.root.appendChild(this.svg);
@@ -370,25 +398,75 @@ class Viewer implements ViewerHandle {
     });
     el("circle", { cx: 1.2, cy: 1.2, r: 1.05, class: "bml-grid-dot" }, pattern);
     this.defs.appendChild(pattern);
+  }
 
+  /* ------------------------------------------------------------- edge paint */
+
+  /**
+   * Arrowheads point at the target, so their color is the target node's color.
+   * Rebuild them per render because visibility and edits change which kinds the
+   * diagram actually shows.
+   */
+  private renderEdgeDefs(nodes: Map<string, NodeDecl>): void {
+    this.defs.querySelectorAll("[data-bml-edge-def]").forEach((node) => node.remove());
+    if (!this.viewDoc) return;
     const kinds = new Set<string>();
-    if (this.doc) for (const edge of this.doc.edges) kinds.add(edge.kind);
-    for (const kind of ["rest", "acp", "sse", "sql", "rpc", "oidc", "llm", "mcp", "ws", "gate", "opt"]) {
-      kinds.add(kind);
+    for (const edge of this.viewDoc.edges) {
+      const to = nodes.get(edge.to);
+      if (to) kinds.add(to.kind);
     }
     for (const kind of kinds) {
       const marker = el("marker", {
-        id: `bml-arrow-${kind}`,
+        id: `bml-arrow-to-${kind}`,
         viewBox: "0 0 10 10",
         refX: 8.4,
         refY: 5,
         markerWidth: 6.6,
         markerHeight: 6.6,
         orient: "auto-start-reverse",
-      });
-      el("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: edgeKindStyle(kind).color }, marker);
-      this.defs.appendChild(marker);
+        "data-bml-edge-def": "",
+      }, this.defs);
+      el("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: nodeKindStyle(kind).color }, marker);
     }
+  }
+
+  /**
+   * Edges fade from the source node color to the target node color. At a node
+   * every outgoing line therefore starts in the same lighter tone while every
+   * incoming line ends in that node's solid tone, so direction stays readable
+   * even when both sides use the same border.
+   */
+  private edgePaint(
+    edge: EdgeDecl,
+    start: Point,
+    end: Point,
+    nodes: Map<string, NodeDecl>,
+    index: number,
+  ): string {
+    const from = nodes.get(edge.from);
+    const to = nodes.get(edge.to);
+    if (!from || !to) return nodeKindStyle("ext").color;
+    const source = nodeKindStyle(from.kind).color;
+    const target = nodeKindStyle(to.kind).color;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return target;
+    // Keep the source tint to a short collar that follows the port, then run
+    // in the target color: the line reads as belonging to where it is going.
+    const reach = Math.min(1, 72 / (Math.hypot(dx, dy) || 1));
+    const id = `bml-edge-paint-${index}`;
+    const gradient = el("linearGradient", {
+      id,
+      gradientUnits: "userSpaceOnUse",
+      x1: start.x,
+      y1: start.y,
+      x2: start.x + dx * reach,
+      y2: start.y + dy * reach,
+      "data-bml-edge-def": "",
+    }, this.defs);
+    el("stop", { offset: "0%", "stop-color": lightenHex(source, 0.55) }, gradient);
+    el("stop", { offset: "100%", "stop-color": target }, gradient);
+    return `url(#${id})`;
   }
 
   private render(): void {
@@ -404,6 +482,7 @@ class Viewer implements ViewerHandle {
     this.headerLayer.innerHTML = "";
     this.labelLayer.innerHTML = "";
     this.uiLayer.innerHTML = "";
+    this.guideLayer.innerHTML = "";
     this.overlayLayer.innerHTML = "";
 
     const grid = el("rect", {
@@ -569,6 +648,7 @@ class Viewer implements ViewerHandle {
    */
   private computeBundles(): void {
     this.bundleOf = new Map();
+    this.bundleGroups = [];
     this.bundleInfo = new Map();
     this.forcedAnchors = new Map();
     this.trunks = new Map();
@@ -633,6 +713,16 @@ class Viewer implements ViewerHandle {
         const valid = outward > 0 ? at >= nearNode && at <= nearPeers : at <= nearNode && at >= nearPeers;
         if (valid) trunk = horizontal ? { x: at } : { y: at };
       }
+      // The final point is assigned together with every other port on this
+      // border; keep the midpoint until computePorts() owns the rail.
+      this.bundleGroups.push({
+        name,
+        end,
+        nodeId: sharedNode.id,
+        side,
+        centroid,
+        edges: peers.map((item) => item.edge),
+      });
       for (const item of peers) {
         this.bundleOf.set(item.edge.id, name);
         this.bundleInfo.set(item.edge.id, { end, trunk, sharedX: point.x, sharedY: point.y });
@@ -645,41 +735,113 @@ class Viewer implements ViewerHandle {
   }
 
   /**
-   * Orthogonal routes for every edge. Lanes shift the trunk/stub of an edge so
-   * no two edges draw on the same line; leftover conflicts are repaired by
-   * re-laning the earlier edge while the total overlap keeps dropping.
+   * Ports are assigned after a first routing pass: only sides that actually
+   * carry edges are considered, and inbound/outbound edges on one side get
+   * separate attachment points while their own groups still share one. Bundles
+   * keep their own point on the same rail. The final pass is pinned to these
+   * ports, so a line entering a node can never sit on a line leaving it.
    */
-  private buildOrthogonalRoutes(
-    nodeObstacles: { id: string; rect: Rect }[],
-    soft: Rect[],
+  private computePorts(baseline: Map<string, OrthogonalRoute>): void {
+    if (!this.viewDoc) return;
+    const nodes = this.nodeMap();
+    const boxes = new Map([...nodes].map(([id, node]) => [id, boxOf(node)]));
+    type SideUse = {
+      box: NodeBox;
+      ins: EdgeDecl[];
+      outs: EdgeDecl[];
+      bundles: BundleGroup[];
+    };
+    const uses = new Map<string, SideUse>();
+    const useOf = (nodeId: string, side: EdgeSide): SideUse => {
+      const key = `${nodeId}\u0000${side}`;
+      let use = uses.get(key);
+      if (!use) {
+        use = { box: boxes.get(nodeId)!, ins: [], outs: [], bundles: [] };
+        uses.set(key, use);
+      }
+      return use;
+    };
+    for (const group of this.bundleGroups) {
+      useOf(group.nodeId, group.side).bundles.push(group);
+    }
+    for (const edge of this.viewDoc.edges) {
+      const route = baseline.get(edge.id);
+      if (!route) continue;
+      const fromBox = boxes.get(edge.from);
+      const toBox = boxes.get(edge.to);
+      if (!fromBox || !toBox) continue;
+      const bundled = this.bundleInfo.get(edge.id)?.end;
+      if (bundled !== "from") {
+        useOf(edge.from, edgeSide(route.points[0]!, fromBox)).outs.push(edge);
+      }
+      if (bundled !== "to") {
+        const last = route.points[route.points.length - 1]!;
+        useOf(edge.to, edgeSide(last, toBox)).ins.push(edge);
+      }
+    }
+
+    for (const [key, use] of uses) {
+      const side = key.slice(key.indexOf("\u0000") + 1) as EdgeSide;
+      const groups: PortGroup[] = use.bundles.map((bundle) => ({
+        key: `bundle:${bundle.name}`,
+        desired: sideAlong(use.box, side, bundle.centroid),
+      }));
+      const bundles = new Map(use.bundles.map((bundle) => [`bundle:${bundle.name}`, bundle]));
+      if (use.ins.length) {
+        const desired =
+          use.ins.reduce((sum, edge) => {
+            const other = boxes.get(edge.from);
+            return sum + (other ? sideAlong(use.box, side, { x: other.cx, y: other.cy }) : 0);
+          }, 0) / use.ins.length;
+        groups.push({ key: "in", desired });
+      }
+      if (use.outs.length) {
+        const desired =
+          use.outs.reduce((sum, edge) => {
+            const other = boxes.get(edge.to);
+            return sum + (other ? sideAlong(use.box, side, { x: other.cx, y: other.cy }) : 0);
+          }, 0) / use.outs.length;
+        groups.push({ key: "out", desired });
+      }
+      if (!groups.length) continue;
+
+      for (const port of planSidePorts(use.box, side, groups)) {
+        const bundle = bundles.get(port.key);
+        if (bundle) {
+          for (const edge of bundle.edges) {
+            const forced = this.forcedAnchors.get(edge.id) ?? {};
+            forced[bundle.end] = { point: port.point, side };
+            this.forcedAnchors.set(edge.id, forced);
+            const info = this.bundleInfo.get(edge.id);
+            if (info) {
+              info.sharedX = port.point.x;
+              info.sharedY = port.point.y;
+            }
+          }
+          continue;
+        }
+        if (port.key !== "in" && port.key !== "out") continue;
+        const end = port.key === "in" ? "to" : "from";
+        const list = port.key === "in" ? use.ins : use.outs;
+        for (const edge of list) {
+          const forced = this.forcedAnchors.get(edge.id) ?? {};
+          forced[end] = { point: port.point, side };
+          this.forcedAnchors.set(edge.id, forced);
+        }
+      }
+    }
+  }
+
+  /**
+   * Greedy lane assignment plus overlap repair for one candidate set.
+   */
+  private selectRoutes(
+    edges: EdgeDecl[],
+    candidates: Map<string, Map<number, OrthogonalRoute>>,
+    byId: Map<string, NodeDecl>,
+    paint = false,
   ): Map<string, OrthogonalRoute> {
     const routes = new Map<string, OrthogonalRoute>();
-    if (!this.viewDoc) return routes;
-    this.computeBundles();
-    const ctx = {
-      byId: this.nodeMap(),
-      pairs: indexPairs(this.viewDoc),
-      fans: this.fans,
-      obstacles: nodeObstacles,
-      soft,
-      anchors: this.forcedAnchors,
-      trunks: this.trunks,
-    };
-    const edges = this.viewDoc.edges;
-    const LANES = [0, 1, -1, 2, -2, 3, -3, 4, -4];
-    // The router scores every side pair per lane, so compute the candidates
-    // once up front; the greedy and repair passes only look them up.
-    const candidates = new Map<string, Map<number, OrthogonalRoute>>();
-    for (const edge of edges) {
-      const perLane = new Map<number, OrthogonalRoute>();
-      // Bundled edges share one trunk, so they must stay on the base lane.
-      const lanesFor = this.bundleOf.has(edge.id) ? [0] : LANES;
-      for (const lane of lanesFor) {
-        const route = orthogonalRoute(edge, ctx, lane);
-        if (route) perLane.set(lane, route);
-      }
-      candidates.set(edge.id, perLane);
-    }
     const lanes = new Map<string, number>();
     const routeOf = (edge: EdgeDecl): OrthogonalRoute | undefined =>
       candidates.get(edge.id)?.get(lanes.get(edge.id) ?? 0);
@@ -688,15 +850,23 @@ class Viewer implements ViewerHandle {
       const bundle = this.bundleOf.get(a);
       return bundle !== undefined && bundle === this.bundleOf.get(b);
     };
-    // Two edges in the same color can share a line and still read as one
-    // stroke, so their overlap is a soft cost; different colors must separate.
-    const colorOf = new Map(edges.map((edge) => [edge.id, edgeKindStyle(edge.kind).color]));
+    // Lane separation follows the stroke color. The first pass keeps protocol
+    // colors so repainting never changes side choices; the final pass compares
+    // the actual gradient (source kind -> target kind) before merging lines.
+    const colorOf = new Map(
+      edges.map((edge) => [
+        edge.id,
+        paint
+          ? `${byId.get(edge.from)?.kind ?? ""}>${byId.get(edge.to)?.kind ?? ""}`
+          : edgeKindStyle(edge.kind).color,
+      ]),
+    );
     const weightOf = (a: string, b: string): number => (colorOf.get(a) === colorOf.get(b) ? 0.25 : 1);
 
     const accepted: { id: string; points: Point[] }[] = [];
     for (const edge of edges) {
       let chosen = 0;
-      for (const lane of this.bundleOf.has(edge.id) ? [0] : LANES) {
+      for (const lane of this.bundleOf.has(edge.id) ? [0] : ORTHO_LANES) {
         const route = candidates.get(edge.id)?.get(lane);
         if (!route) continue;
         const clash = accepted.some((item) => {
@@ -735,7 +905,7 @@ class Viewer implements ViewerHandle {
       let improved = false;
       for (const edge of edges) {
         const previous = lanes.get(edge.id) ?? 0;
-        for (const lane of LANES) {
+        for (const lane of ORTHO_LANES) {
           if (lane === previous || !candidates.get(edge.id)?.has(lane)) continue;
           lanes.set(edge.id, lane);
           const trialScore = totalOverlap();
@@ -755,6 +925,50 @@ class Viewer implements ViewerHandle {
       if (route) routes.set(edge.id, route);
     }
     return routes;
+  }
+
+  /**
+   * Orthogonal routes for every edge. Lanes shift the trunk/stub of an edge so
+   * no two edges draw on the same line; leftover conflicts are repaired by
+   * re-laning the earlier edge while the total overlap keeps dropping.
+   */
+  private buildOrthogonalRoutes(
+    nodeObstacles: { id: string; rect: Rect }[],
+    soft: Rect[],
+  ): Map<string, OrthogonalRoute> {
+    if (!this.viewDoc) return new Map();
+    this.computeBundles();
+    const edges = this.viewDoc.edges;
+    const ctx = {
+      byId: this.nodeMap(),
+      pairs: indexPairs(this.viewDoc),
+      fans: this.fans,
+      obstacles: nodeObstacles,
+      soft,
+      anchors: this.forcedAnchors,
+      trunks: this.trunks,
+    };
+    const buildCandidates = (): Map<string, Map<number, OrthogonalRoute>> => {
+      const candidates = new Map<string, Map<number, OrthogonalRoute>>();
+      for (const edge of edges) {
+        const perLane = new Map<number, OrthogonalRoute>();
+        // Bundled edges share one trunk, so they must stay on the base lane.
+        const lanes = this.bundleOf.has(edge.id) ? [0] : ORTHO_LANES;
+        for (const lane of lanes) {
+          const route = orthogonalRoute(edge, ctx, lane);
+          if (route) perLane.set(lane, route);
+        }
+        candidates.set(edge.id, perLane);
+      }
+      return candidates;
+    };
+
+    // The first pass chooses sides exactly as the router always did. Ports are
+    // then spread only on the sides that pass actually used, and the second
+    // pass re-lanes the pinned endpoints, so slots never force a worse detour.
+    const baseline = this.selectRoutes(edges, buildCandidates(), ctx.byId);
+    this.computePorts(baseline);
+    return this.selectRoutes(edges, buildCandidates(), ctx.byId, true);
   }
 
   private collectObstacles(): {
@@ -862,6 +1076,8 @@ class Viewer implements ViewerHandle {
     if (!this.doc || !this.viewDoc) return;
     this.computeFans();
     const { labels: obstacles, routes: routeObstacles, soft } = this.collectObstacles();
+    const nodes = this.nodeMap();
+    this.renderEdgeDefs(nodes);
 
     const orthogonal = this.routeStyle === "orthogonal";
     const geos = new Map<string, EdgeGeometry>();
@@ -880,6 +1096,7 @@ class Viewer implements ViewerHandle {
     const orthHops = routes ? computePolylineHops(this.viewDoc.edges, routes) : null;
     const foreign = this.foreignMarks(routePaths);
 
+    let paintIndex = 0;
     for (const edge of this.viewDoc.edges) {
       const path = routePaths.get(edge.id);
       const geo = geos.get(edge.id);
@@ -889,15 +1106,19 @@ class Viewer implements ViewerHandle {
       const d = orthogonal
         ? polylinePath(path!.points, orthHops?.get(edge.id))
         : edgePath(geo!, hops!.get(edge.id));
+      const start = orthogonal ? path!.points[0]! : geo!.p1;
+      const end = orthogonal ? path!.points[path!.points.length - 1]! : geo!.p2;
+      const paint = this.edgePaint(edge, start, end, nodes, paintIndex++);
+      const arrowKind = nodes.get(edge.to)?.kind ?? "ext";
 
       const group = el("g", { class: "bml-edge", "data-id": edge.id });
       const hit = el("path", { d, class: "bml-edge-hit" }, group);
       const line = el("path", {
         d,
         class: "bml-edge-line",
-        stroke: style.color,
+        stroke: paint,
         "stroke-dasharray": dash || "none",
-        "marker-end": `url(#bml-arrow-${edge.kind})`,
+        "marker-end": `url(#bml-arrow-to-${arrowKind})`,
       }, group);
       this.edgeLayer.appendChild(group);
 
@@ -1116,13 +1337,30 @@ class Viewer implements ViewerHandle {
     const affected = this.viewDoc?.edges.filter(
       (e) => this.selectedNodes.has(e.from) || this.selectedNodes.has(e.to),
     ) ?? [];
+    // Positions and neighbour boxes are fixed for the whole gesture, so every
+    // move re-uses them instead of re-measuring the already dragged nodes.
+    const movingBoxes = moving.map((n) => boxOf(n));
+    const movingIds = new Set(moving.map((n) => n.id));
+    const targets = (this.viewDoc?.nodes ?? [])
+      .filter((n) => n.at && !movingIds.has(n.id))
+      .map((n) => boxOf(n));
+    const snapping = this.options.snap !== false;
     let moved = false;
+    this.clearGuides();
     for (const n of moving) this.nodeEls.get(n.id)?.classList.add("bml-dragging");
 
     const onMove = (e: PointerEvent) => {
       const p = this.toWorld(e.clientX, e.clientY);
-      const dx = Math.round(p.x - start.x);
-      const dy = Math.round(p.y - start.y);
+      let dx = Math.round(p.x - start.x);
+      let dy = Math.round(p.y - start.y);
+      let guides: AlignmentGuide[] = [];
+      if (snapping && !e.altKey && (dx || dy)) {
+        const snapped = snapAlignment(movingBoxes, targets, dx, dy, SNAP_RADIUS / this.view.k);
+        dx = snapped.dx;
+        dy = snapped.dy;
+        guides = snapped.guides;
+      }
+      this.drawGuides(guides);
       if (!dx && !dy) return;
       for (const n of moving) {
         const origin = origins.get(n.id)!;
@@ -1146,6 +1384,7 @@ class Viewer implements ViewerHandle {
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      this.clearGuides();
       for (const n of moving) this.nodeEls.get(n.id)?.classList.remove("bml-dragging");
       if (!moved) return;
       this.suppressClick = true;
@@ -1155,6 +1394,26 @@ class Viewer implements ViewerHandle {
 
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+  }
+
+  /** Draw the alignment rules for the current snapped drag; one line per axis. */
+  private drawGuides(guides: AlignmentGuide[]): void {
+    this.guideLayer.replaceChildren();
+    for (const guide of guides) {
+      const vertical = guide.axis === "x";
+      el("line", {
+        x1: vertical ? guide.at : guide.from,
+        y1: vertical ? guide.from : guide.at,
+        x2: vertical ? guide.at : guide.to,
+        y2: vertical ? guide.to : guide.at,
+        "vector-effect": "non-scaling-stroke",
+        class: "bml-guide",
+      }, this.guideLayer);
+    }
+  }
+
+  private clearGuides(): void {
+    this.guideLayer.replaceChildren();
   }
 
   private startBendDrag(event: PointerEvent, edge: EdgeDecl): void {
@@ -1835,6 +2094,18 @@ function placeLabel(
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+/** Mix a hex color toward white; used for the source end of an edge gradient. */
+function lightenHex(hex: string, amount: number): string {
+  const match = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!match) return hex;
+  const value = parseInt(match[1]!, 16);
+  const mix = (channel: number) => Math.round(channel + (255 - channel) * clamp(amount, 0, 1));
+  const r = mix((value >> 16) & 255);
+  const g = mix((value >> 8) & 255);
+  const b = mix(value & 255);
+  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
 }
 
 /* ------------------------------------------------------------ wire hops */

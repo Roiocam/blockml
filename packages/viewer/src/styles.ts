@@ -42,6 +42,8 @@ export const VIEWER_CSS = `
 .bml-toggle-sign{font-weight:600;font-size:12px;line-height:1;font-family:inherit;pointer-events:none}
 .bml-node{cursor:grab}
 .bml-node.bml-dragging{cursor:grabbing}
+.bml-guides{pointer-events:none}
+.bml-guide{stroke:var(--bml-accent);stroke-width:1;fill:none;opacity:.85}
 .bml-node-box{fill:var(--bml-panel);stroke:#dbe2ea;stroke-width:1.2;filter:url(#bml-node-shadow)}
 .bml-root[data-bml-theme="dark"] .bml-node-box{stroke:#243146}
 .bml-node:hover .bml-node-box{stroke:#b9c4d2}

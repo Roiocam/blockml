@@ -82,6 +82,8 @@
 .bml-toggle-sign{font-weight:600;font-size:12px;line-height:1;font-family:inherit;pointer-events:none}
 .bml-node{cursor:grab}
 .bml-node.bml-dragging{cursor:grabbing}
+.bml-guides{pointer-events:none}
+.bml-guide{stroke:var(--bml-accent);stroke-width:1;fill:none;opacity:.85}
 .bml-node-box{fill:var(--bml-panel);stroke:#dbe2ea;stroke-width:1.2;filter:url(#bml-node-shadow)}
 .bml-root[data-bml-theme="dark"] .bml-node-box{stroke:#243146}
 .bml-node:hover .bml-node-box{stroke:#b9c4d2}
@@ -1149,6 +1151,7 @@ var BlockML = (() => {
     };
   }
   var ANCHOR_MARGIN = 14;
+  var PORT_GAP = 18;
   function sideRange(box, side) {
     if (side === "left" || side === "right") {
       return { min: box.y + ANCHOR_MARGIN, max: box.y + box.h - ANCHOR_MARGIN };
@@ -1328,6 +1331,123 @@ var BlockML = (() => {
     if (side === "right") return { x: box.x + box.w, y: cy };
     if (side === "top") return { x: cx, y: box.y };
     return { x: cx, y: box.y + box.h };
+  }
+  function sidePoint(box, side, along) {
+    const range = sideRange(box, side);
+    const value = clampNumber(along, range.min, range.max);
+    if (side === "left") return { x: box.x, y: value };
+    if (side === "right") return { x: box.x + box.w, y: value };
+    if (side === "top") return { x: value, y: box.y };
+    return { x: value, y: box.y + box.h };
+  }
+  function sideAlong(box, side, point) {
+    const range = sideRange(box, side);
+    return clampNumber(side === "left" || side === "right" ? point.y : point.x, range.min, range.max);
+  }
+  function portPositions(box, side, count, gap = PORT_GAP) {
+    if (count <= 0) return [];
+    const range = sideRange(box, side);
+    const mid = (range.min + range.max) / 2;
+    if (count === 1) return [mid];
+    const step = Math.min(gap, (range.max - range.min) / (count - 1));
+    const start = mid - step * (count - 1) / 2;
+    return Array.from({ length: count }, (_, index) => start + index * step);
+  }
+  function planSidePorts(box, side, groups, gap = PORT_GAP) {
+    const ordered = [...groups].sort((a, b) => {
+      const delta = (a.desired ?? 0) - (b.desired ?? 0);
+      if (delta) return delta;
+      return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+    });
+    const positions = portPositions(box, side, ordered.length, gap);
+    return ordered.map((group, index) => ({
+      key: group.key,
+      side,
+      point: sidePoint(box, side, positions[index])
+    }));
+  }
+  var GUIDE_PAD = 10;
+  var GUIDE_EPSILON = 0.5;
+  function unionOf(rects) {
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const rect of rects) {
+      left = Math.min(left, rect.x);
+      top = Math.min(top, rect.y);
+      right = Math.max(right, rect.x + rect.w);
+      bottom = Math.max(bottom, rect.y + rect.h);
+    }
+    if (!Number.isFinite(left)) return null;
+    return { x: left, y: top, w: right - left, h: bottom - top };
+  }
+  function anchorsOf(box, axis) {
+    if (axis === "x") return [box.x, box.x + box.w / 2, box.x + box.w];
+    return [box.y, box.y + box.h / 2, box.y + box.h];
+  }
+  function snapAlignment(moving, targets, dx, dy, threshold) {
+    if (!moving.length || !targets.length || !(threshold > 0)) return { dx, dy, guides: [] };
+    const moved = moving.map((rect) => ({ ...rect, x: rect.x + dx, y: rect.y + dy }));
+    const group = unionOf(moved);
+    if (!group) return { dx, dy, guides: [] };
+    const closest = (axis) => {
+      const sources = [...moved.flatMap((box) => anchorsOf(box, axis)), ...anchorsOf(group, axis)];
+      let best = null;
+      for (const target of targets) {
+        for (const at of anchorsOf(target, axis)) {
+          for (const source of sources) {
+            const delta = at - source;
+            if (Math.abs(delta) > threshold) continue;
+            if (!best || Math.abs(delta) < Math.abs(best.delta)) best = { delta, at };
+          }
+        }
+      }
+      return best;
+    };
+    const snapX = closest("x");
+    const snapY = closest("y");
+    const snapped = {
+      x: group.x + (snapX?.delta ?? 0),
+      y: group.y + (snapY?.delta ?? 0),
+      w: group.w,
+      h: group.h
+    };
+    const span = (axis, at) => {
+      let from = Infinity;
+      let to = -Infinity;
+      for (const box of [...moved, ...targets]) {
+        if (!anchorsOf(box, axis).some((value) => Math.abs(value - at) < GUIDE_EPSILON)) continue;
+        if (axis === "x") {
+          from = Math.min(from, box.y);
+          to = Math.max(to, box.y + box.h);
+        } else {
+          from = Math.min(from, box.x);
+          to = Math.max(to, box.x + box.w);
+        }
+      }
+      return Number.isFinite(from) ? { from, to } : null;
+    };
+    const guides = [];
+    if (snapX) {
+      const line = span("x", snapX.at);
+      if (line) guides.push({
+        axis: "x",
+        at: snapX.at,
+        from: Math.min(line.from, snapped.y) - GUIDE_PAD,
+        to: Math.max(line.to, snapped.y + snapped.h) + GUIDE_PAD
+      });
+    }
+    if (snapY) {
+      const line = span("y", snapY.at);
+      if (line) guides.push({
+        axis: "y",
+        at: snapY.at,
+        from: Math.min(line.from, snapped.x) - GUIDE_PAD,
+        to: Math.max(line.to, snapped.x + snapped.w) + GUIDE_PAD
+      });
+    }
+    return { dx: dx + (snapX?.delta ?? 0), dy: dy + (snapY?.delta ?? 0), guides };
   }
   function primarySide(box, other) {
     const dx = other.cx - box.cx;
@@ -1818,6 +1938,8 @@ var BlockML = (() => {
 .bml-toggle-sign{font-weight:600;font-size:12px;line-height:1;font-family:inherit;pointer-events:none}
 .bml-node{cursor:grab}
 .bml-node.bml-dragging{cursor:grabbing}
+.bml-guides{pointer-events:none}
+.bml-guide{stroke:var(--bml-accent);stroke-width:1;fill:none;opacity:.85}
 .bml-node-box{fill:var(--bml-panel);stroke:#dbe2ea;stroke-width:1.2;filter:url(#bml-node-shadow)}
 .bml-root[data-bml-theme="dark"] .bml-node-box{stroke:#243146}
 .bml-node:hover .bml-node-box{stroke:#b9c4d2}
@@ -1932,6 +2054,8 @@ var BlockML = (() => {
 
   // packages/viewer/src/viewer.ts
   var SVGNS = "http://www.w3.org/2000/svg";
+  var ORTHO_LANES = [0, 1, -1, 2, -2, 3, -3, 4, -4];
+  var SNAP_RADIUS = 6;
   var stylesInjected = false;
   function injectStyles() {
     if (stylesInjected) return;
@@ -1989,6 +2113,8 @@ var BlockML = (() => {
     headerLayer;
     labelLayer;
     uiLayer;
+    /** Snap guides, kept above the nodes so a rule reads across every box. */
+    guideLayer;
     overlayLayer;
     defs;
     legend;
@@ -2009,6 +2135,7 @@ var BlockML = (() => {
     pointerSelected = false;
     fans = /* @__PURE__ */ new Map();
     bundleOf = /* @__PURE__ */ new Map();
+    bundleGroups = [];
     bundleInfo = /* @__PURE__ */ new Map();
     forcedAnchors = /* @__PURE__ */ new Map();
     trunks = /* @__PURE__ */ new Map();
@@ -2042,6 +2169,7 @@ var BlockML = (() => {
       this.nodeLayer = el("g", { class: "bml-nodes" });
       this.labelLayer = el("g", { class: "bml-labels" });
       this.uiLayer = el("g", { class: "bml-ui" });
+      this.guideLayer = el("g", { class: "bml-guides" });
       this.overlayLayer = el("g", { class: "bml-overlay" });
       this.svg.appendChild(this.defs);
       this.viewport.appendChild(this.groupLayer);
@@ -2050,6 +2178,7 @@ var BlockML = (() => {
       this.viewport.appendChild(this.nodeLayer);
       this.viewport.appendChild(this.labelLayer);
       this.viewport.appendChild(this.uiLayer);
+      this.viewport.appendChild(this.guideLayer);
       this.viewport.appendChild(this.overlayLayer);
       this.svg.appendChild(this.viewport);
       this.root.appendChild(this.svg);
@@ -2184,24 +2313,64 @@ var BlockML = (() => {
       });
       el("circle", { cx: 1.2, cy: 1.2, r: 1.05, class: "bml-grid-dot" }, pattern);
       this.defs.appendChild(pattern);
+    }
+    /* ------------------------------------------------------------- edge paint */
+    /**
+     * Arrowheads point at the target, so their color is the target node's color.
+     * Rebuild them per render because visibility and edits change which kinds the
+     * diagram actually shows.
+     */
+    renderEdgeDefs(nodes) {
+      this.defs.querySelectorAll("[data-bml-edge-def]").forEach((node) => node.remove());
+      if (!this.viewDoc) return;
       const kinds = /* @__PURE__ */ new Set();
-      if (this.doc) for (const edge of this.doc.edges) kinds.add(edge.kind);
-      for (const kind of ["rest", "acp", "sse", "sql", "rpc", "oidc", "llm", "mcp", "ws", "gate", "opt"]) {
-        kinds.add(kind);
+      for (const edge of this.viewDoc.edges) {
+        const to = nodes.get(edge.to);
+        if (to) kinds.add(to.kind);
       }
       for (const kind of kinds) {
         const marker = el("marker", {
-          id: `bml-arrow-${kind}`,
+          id: `bml-arrow-to-${kind}`,
           viewBox: "0 0 10 10",
           refX: 8.4,
           refY: 5,
           markerWidth: 6.6,
           markerHeight: 6.6,
-          orient: "auto-start-reverse"
-        });
-        el("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: edgeKindStyle(kind).color }, marker);
-        this.defs.appendChild(marker);
+          orient: "auto-start-reverse",
+          "data-bml-edge-def": ""
+        }, this.defs);
+        el("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: nodeKindStyle(kind).color }, marker);
       }
+    }
+    /**
+     * Edges fade from the source node color to the target node color. At a node
+     * every outgoing line therefore starts in the same lighter tone while every
+     * incoming line ends in that node's solid tone, so direction stays readable
+     * even when both sides use the same border.
+     */
+    edgePaint(edge, start, end, nodes, index) {
+      const from = nodes.get(edge.from);
+      const to = nodes.get(edge.to);
+      if (!from || !to) return nodeKindStyle("ext").color;
+      const source = nodeKindStyle(from.kind).color;
+      const target = nodeKindStyle(to.kind).color;
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return target;
+      const reach = Math.min(1, 72 / (Math.hypot(dx, dy) || 1));
+      const id = `bml-edge-paint-${index}`;
+      const gradient = el("linearGradient", {
+        id,
+        gradientUnits: "userSpaceOnUse",
+        x1: start.x,
+        y1: start.y,
+        x2: start.x + dx * reach,
+        y2: start.y + dy * reach,
+        "data-bml-edge-def": ""
+      }, this.defs);
+      el("stop", { offset: "0%", "stop-color": lightenHex(source, 0.55) }, gradient);
+      el("stop", { offset: "100%", "stop-color": target }, gradient);
+      return `url(#${id})`;
     }
     render() {
       if (!this.doc || !this.viewDoc) return;
@@ -2216,6 +2385,7 @@ var BlockML = (() => {
       this.headerLayer.innerHTML = "";
       this.labelLayer.innerHTML = "";
       this.uiLayer.innerHTML = "";
+      this.guideLayer.innerHTML = "";
       this.overlayLayer.innerHTML = "";
       const grid = el("rect", {
         x: -8e3,
@@ -2382,6 +2552,7 @@ var BlockML = (() => {
      */
     computeBundles() {
       this.bundleOf = /* @__PURE__ */ new Map();
+      this.bundleGroups = [];
       this.bundleInfo = /* @__PURE__ */ new Map();
       this.forcedAnchors = /* @__PURE__ */ new Map();
       this.trunks = /* @__PURE__ */ new Map();
@@ -2438,6 +2609,14 @@ var BlockML = (() => {
           const valid = outward > 0 ? at >= nearNode && at <= nearPeers : at <= nearNode && at >= nearPeers;
           if (valid) trunk = horizontal ? { x: at } : { y: at };
         }
+        this.bundleGroups.push({
+          name,
+          end,
+          nodeId: sharedNode.id,
+          side,
+          centroid,
+          edges: peers.map((item) => item.edge)
+        });
         for (const item of peers) {
           this.bundleOf.set(item.edge.id, name);
           this.bundleInfo.set(item.edge.id, { end, trunk, sharedX: point.x, sharedY: point.y });
@@ -2449,47 +2628,114 @@ var BlockML = (() => {
       }
     }
     /**
-     * Orthogonal routes for every edge. Lanes shift the trunk/stub of an edge so
-     * no two edges draw on the same line; leftover conflicts are repaired by
-     * re-laning the earlier edge while the total overlap keeps dropping.
+     * Ports are assigned after a first routing pass: only sides that actually
+     * carry edges are considered, and inbound/outbound edges on one side get
+     * separate attachment points while their own groups still share one. Bundles
+     * keep their own point on the same rail. The final pass is pinned to these
+     * ports, so a line entering a node can never sit on a line leaving it.
      */
-    buildOrthogonalRoutes(nodeObstacles, soft) {
-      const routes = /* @__PURE__ */ new Map();
-      if (!this.viewDoc) return routes;
-      this.computeBundles();
-      const ctx = {
-        byId: this.nodeMap(),
-        pairs: indexPairs(this.viewDoc),
-        fans: this.fans,
-        obstacles: nodeObstacles,
-        soft,
-        anchors: this.forcedAnchors,
-        trunks: this.trunks
-      };
-      const edges = this.viewDoc.edges;
-      const LANES = [0, 1, -1, 2, -2, 3, -3, 4, -4];
-      const candidates = /* @__PURE__ */ new Map();
-      for (const edge of edges) {
-        const perLane = /* @__PURE__ */ new Map();
-        const lanesFor = this.bundleOf.has(edge.id) ? [0] : LANES;
-        for (const lane of lanesFor) {
-          const route = orthogonalRoute(edge, ctx, lane);
-          if (route) perLane.set(lane, route);
+    computePorts(baseline) {
+      if (!this.viewDoc) return;
+      const nodes = this.nodeMap();
+      const boxes = new Map([...nodes].map(([id, node]) => [id, boxOf(node)]));
+      const uses = /* @__PURE__ */ new Map();
+      const useOf = (nodeId, side) => {
+        const key = `${nodeId}\0${side}`;
+        let use = uses.get(key);
+        if (!use) {
+          use = { box: boxes.get(nodeId), ins: [], outs: [], bundles: [] };
+          uses.set(key, use);
         }
-        candidates.set(edge.id, perLane);
+        return use;
+      };
+      for (const group of this.bundleGroups) {
+        useOf(group.nodeId, group.side).bundles.push(group);
       }
+      for (const edge of this.viewDoc.edges) {
+        const route = baseline.get(edge.id);
+        if (!route) continue;
+        const fromBox = boxes.get(edge.from);
+        const toBox = boxes.get(edge.to);
+        if (!fromBox || !toBox) continue;
+        const bundled = this.bundleInfo.get(edge.id)?.end;
+        if (bundled !== "from") {
+          useOf(edge.from, edgeSide(route.points[0], fromBox)).outs.push(edge);
+        }
+        if (bundled !== "to") {
+          const last = route.points[route.points.length - 1];
+          useOf(edge.to, edgeSide(last, toBox)).ins.push(edge);
+        }
+      }
+      for (const [key, use] of uses) {
+        const side = key.slice(key.indexOf("\0") + 1);
+        const groups = use.bundles.map((bundle) => ({
+          key: `bundle:${bundle.name}`,
+          desired: sideAlong(use.box, side, bundle.centroid)
+        }));
+        const bundles = new Map(use.bundles.map((bundle) => [`bundle:${bundle.name}`, bundle]));
+        if (use.ins.length) {
+          const desired = use.ins.reduce((sum, edge) => {
+            const other = boxes.get(edge.from);
+            return sum + (other ? sideAlong(use.box, side, { x: other.cx, y: other.cy }) : 0);
+          }, 0) / use.ins.length;
+          groups.push({ key: "in", desired });
+        }
+        if (use.outs.length) {
+          const desired = use.outs.reduce((sum, edge) => {
+            const other = boxes.get(edge.to);
+            return sum + (other ? sideAlong(use.box, side, { x: other.cx, y: other.cy }) : 0);
+          }, 0) / use.outs.length;
+          groups.push({ key: "out", desired });
+        }
+        if (!groups.length) continue;
+        for (const port of planSidePorts(use.box, side, groups)) {
+          const bundle = bundles.get(port.key);
+          if (bundle) {
+            for (const edge of bundle.edges) {
+              const forced = this.forcedAnchors.get(edge.id) ?? {};
+              forced[bundle.end] = { point: port.point, side };
+              this.forcedAnchors.set(edge.id, forced);
+              const info = this.bundleInfo.get(edge.id);
+              if (info) {
+                info.sharedX = port.point.x;
+                info.sharedY = port.point.y;
+              }
+            }
+            continue;
+          }
+          if (port.key !== "in" && port.key !== "out") continue;
+          const end = port.key === "in" ? "to" : "from";
+          const list = port.key === "in" ? use.ins : use.outs;
+          for (const edge of list) {
+            const forced = this.forcedAnchors.get(edge.id) ?? {};
+            forced[end] = { point: port.point, side };
+            this.forcedAnchors.set(edge.id, forced);
+          }
+        }
+      }
+    }
+    /**
+     * Greedy lane assignment plus overlap repair for one candidate set.
+     */
+    selectRoutes(edges, candidates, byId, paint = false) {
+      const routes = /* @__PURE__ */ new Map();
       const lanes = /* @__PURE__ */ new Map();
       const routeOf = (edge) => candidates.get(edge.id)?.get(lanes.get(edge.id) ?? 0);
       const sameBundle = (a, b) => {
         const bundle = this.bundleOf.get(a);
         return bundle !== void 0 && bundle === this.bundleOf.get(b);
       };
-      const colorOf = new Map(edges.map((edge) => [edge.id, edgeKindStyle(edge.kind).color]));
+      const colorOf = new Map(
+        edges.map((edge) => [
+          edge.id,
+          paint ? `${byId.get(edge.from)?.kind ?? ""}>${byId.get(edge.to)?.kind ?? ""}` : edgeKindStyle(edge.kind).color
+        ])
+      );
       const weightOf = (a, b) => colorOf.get(a) === colorOf.get(b) ? 0.25 : 1;
       const accepted = [];
       for (const edge of edges) {
         let chosen = 0;
-        for (const lane of this.bundleOf.has(edge.id) ? [0] : LANES) {
+        for (const lane of this.bundleOf.has(edge.id) ? [0] : ORTHO_LANES) {
           const route2 = candidates.get(edge.id)?.get(lane);
           if (!route2) continue;
           const clash = accepted.some((item) => {
@@ -2525,7 +2771,7 @@ var BlockML = (() => {
         let improved = false;
         for (const edge of edges) {
           const previous = lanes.get(edge.id) ?? 0;
-          for (const lane of LANES) {
+          for (const lane of ORTHO_LANES) {
             if (lane === previous || !candidates.get(edge.id)?.has(lane)) continue;
             lanes.set(edge.id, lane);
             const trialScore = totalOverlap();
@@ -2545,6 +2791,41 @@ var BlockML = (() => {
         if (route) routes.set(edge.id, route);
       }
       return routes;
+    }
+    /**
+     * Orthogonal routes for every edge. Lanes shift the trunk/stub of an edge so
+     * no two edges draw on the same line; leftover conflicts are repaired by
+     * re-laning the earlier edge while the total overlap keeps dropping.
+     */
+    buildOrthogonalRoutes(nodeObstacles, soft) {
+      if (!this.viewDoc) return /* @__PURE__ */ new Map();
+      this.computeBundles();
+      const edges = this.viewDoc.edges;
+      const ctx = {
+        byId: this.nodeMap(),
+        pairs: indexPairs(this.viewDoc),
+        fans: this.fans,
+        obstacles: nodeObstacles,
+        soft,
+        anchors: this.forcedAnchors,
+        trunks: this.trunks
+      };
+      const buildCandidates = () => {
+        const candidates = /* @__PURE__ */ new Map();
+        for (const edge of edges) {
+          const perLane = /* @__PURE__ */ new Map();
+          const lanes = this.bundleOf.has(edge.id) ? [0] : ORTHO_LANES;
+          for (const lane of lanes) {
+            const route = orthogonalRoute(edge, ctx, lane);
+            if (route) perLane.set(lane, route);
+          }
+          candidates.set(edge.id, perLane);
+        }
+        return candidates;
+      };
+      const baseline = this.selectRoutes(edges, buildCandidates(), ctx.byId);
+      this.computePorts(baseline);
+      return this.selectRoutes(edges, buildCandidates(), ctx.byId, true);
     }
     collectObstacles() {
       const family = getComputedStyle(this.root).fontFamily;
@@ -2646,6 +2927,8 @@ var BlockML = (() => {
       if (!this.doc || !this.viewDoc) return;
       this.computeFans();
       const { labels: obstacles, routes: routeObstacles, soft } = this.collectObstacles();
+      const nodes = this.nodeMap();
+      this.renderEdgeDefs(nodes);
       const orthogonal = this.routeStyle === "orthogonal";
       const geos = /* @__PURE__ */ new Map();
       const routePaths = /* @__PURE__ */ new Map();
@@ -2662,6 +2945,7 @@ var BlockML = (() => {
       const hops = orthogonal ? null : computeHops(this.viewDoc.edges, geos);
       const orthHops = routes ? computePolylineHops(this.viewDoc.edges, routes) : null;
       const foreign = this.foreignMarks(routePaths);
+      let paintIndex = 0;
       for (const edge of this.viewDoc.edges) {
         const path = routePaths.get(edge.id);
         const geo = geos.get(edge.id);
@@ -2669,14 +2953,18 @@ var BlockML = (() => {
         const style = edgeKindStyle(edge.kind);
         const dash = edge.dash === null ? style.dash ?? "" : edge.dash ? "6 4" : "";
         const d = orthogonal ? polylinePath(path.points, orthHops?.get(edge.id)) : edgePath(geo, hops.get(edge.id));
+        const start = orthogonal ? path.points[0] : geo.p1;
+        const end = orthogonal ? path.points[path.points.length - 1] : geo.p2;
+        const paint = this.edgePaint(edge, start, end, nodes, paintIndex++);
+        const arrowKind = nodes.get(edge.to)?.kind ?? "ext";
         const group = el("g", { class: "bml-edge", "data-id": edge.id });
         const hit = el("path", { d, class: "bml-edge-hit" }, group);
         const line = el("path", {
           d,
           class: "bml-edge-line",
-          stroke: style.color,
+          stroke: paint,
           "stroke-dasharray": dash || "none",
-          "marker-end": `url(#bml-arrow-${edge.kind})`
+          "marker-end": `url(#bml-arrow-to-${arrowKind})`
         }, group);
         this.edgeLayer.appendChild(group);
         const labelGroup = el("g", { class: "bml-edge-label-group", "data-id": edge.id });
@@ -2885,12 +3173,25 @@ var BlockML = (() => {
       const affected = this.viewDoc?.edges.filter(
         (e) => this.selectedNodes.has(e.from) || this.selectedNodes.has(e.to)
       ) ?? [];
+      const movingBoxes = moving.map((n) => boxOf(n));
+      const movingIds = new Set(moving.map((n) => n.id));
+      const targets = (this.viewDoc?.nodes ?? []).filter((n) => n.at && !movingIds.has(n.id)).map((n) => boxOf(n));
+      const snapping = this.options.snap !== false;
       let moved = false;
+      this.clearGuides();
       for (const n of moving) this.nodeEls.get(n.id)?.classList.add("bml-dragging");
       const onMove = (e) => {
         const p = this.toWorld(e.clientX, e.clientY);
-        const dx = Math.round(p.x - start.x);
-        const dy = Math.round(p.y - start.y);
+        let dx = Math.round(p.x - start.x);
+        let dy = Math.round(p.y - start.y);
+        let guides = [];
+        if (snapping && !e.altKey && (dx || dy)) {
+          const snapped = snapAlignment(movingBoxes, targets, dx, dy, SNAP_RADIUS / this.view.k);
+          dx = snapped.dx;
+          dy = snapped.dy;
+          guides = snapped.guides;
+        }
+        this.drawGuides(guides);
         if (!dx && !dy) return;
         for (const n of moving) {
           const origin = origins.get(n.id);
@@ -2913,6 +3214,7 @@ var BlockML = (() => {
       const onUp = () => {
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
+        this.clearGuides();
         for (const n of moving) this.nodeEls.get(n.id)?.classList.remove("bml-dragging");
         if (!moved) return;
         this.suppressClick = true;
@@ -2923,6 +3225,24 @@ var BlockML = (() => {
       };
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
+    }
+    /** Draw the alignment rules for the current snapped drag; one line per axis. */
+    drawGuides(guides) {
+      this.guideLayer.replaceChildren();
+      for (const guide of guides) {
+        const vertical = guide.axis === "x";
+        el("line", {
+          x1: vertical ? guide.at : guide.from,
+          y1: vertical ? guide.from : guide.at,
+          x2: vertical ? guide.at : guide.to,
+          y2: vertical ? guide.to : guide.at,
+          "vector-effect": "non-scaling-stroke",
+          class: "bml-guide"
+        }, this.guideLayer);
+      }
+    }
+    clearGuides() {
+      this.guideLayer.replaceChildren();
     }
     startBendDrag(event, edge) {
       if (event.button !== 0 || this.options.readOnly) return;
@@ -3518,6 +3838,16 @@ ${darkRules}`;
   }
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
+  }
+  function lightenHex(hex, amount) {
+    const match = /^#([0-9a-f]{6})$/i.exec(hex);
+    if (!match) return hex;
+    const value = parseInt(match[1], 16);
+    const mix = (channel) => Math.round(channel + (255 - channel) * clamp(amount, 0, 1));
+    const r = mix(value >> 16 & 255);
+    const g = mix(value >> 8 & 255);
+    const b = mix(value & 255);
+    return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
   }
   var HOP_RADIUS = 9;
   var HOP_MIN_T = 0.05;

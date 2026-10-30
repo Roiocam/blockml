@@ -42,7 +42,7 @@ node packages/cli/bin.mjs validate examples/order-platform.blockml
 node packages/cli/bin.mjs render examples/order-platform.blockml -o out/order-platform.html
 ```
 
-产物是一个自包含 HTML：内联 CSS 和 JS、零外部依赖、内网双击即看。画布上可以直接拖节点、拖连线控制点，按住 Shift / Ctrl 点选多个节点后可以整组拖动；两条线交叉时上层连线在交点画一个小圆弧跳过下层；正交走线里每个节点每条边只有一个吸附点（边框中点），线从这里出发再分车道；diagram 里写 `route: orthogonal` 可以切换成 draw.io 式的正交走线（圆角转折、跨线跳弧，默认 `curve` 贝塞尔）；悬停或选中节点会高亮与它相连的边；顶部下拉可以在四种排列算法之间切换；每个分组框右上角可以折叠成带计数的胶囊，「图层」面板能逐个隐藏分组或节点（只影响视图，不改源码）；改完点「下载源码」拿回带坐标的 `.blockml`。
+产物是一个自包含 HTML：内联 CSS 和 JS、零外部依赖、内网双击即看。画布上可以直接拖节点、拖连线控制点，按住 Shift / Ctrl 点选多个节点后可以整组拖动；拖动时靠近其它节点的边或中线会自动吸附并画出对齐线（按住 Alt 临时关闭吸附）；两条线交叉时上层连线在交点画一个小圆弧跳过下层；正交走线按方向分吸附点：同一侧所有入站线共用一个点、所有出站线共用另一个点，两者不重合；连线颜色从起点的节点色（浅）过渡到终点的节点色（实色），箭头取终点色，入站与出站即使在同侧也能一眼分方向；diagram 里写 `route: orthogonal` 可以切换成 draw.io 式的正交走线（圆角转折、跨线跳弧，默认 `curve` 贝塞尔）；悬停或选中节点会高亮与它相连的边；顶部下拉可以在四种排列算法之间切换；每个分组框右上角可以折叠成带计数的胶囊，「图层」面板能逐个隐藏分组或节点（只影响视图，不改源码）；改完点「下载源码」拿回带坐标的 `.blockml`。
 
 仓库里有一份渲染好的示例：[`examples/order-platform.html`](examples/order-platform.html)（虚构的电商订单平台，源码同名 `.blockml`）。
 

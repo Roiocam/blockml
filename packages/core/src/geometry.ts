@@ -82,6 +82,9 @@ export interface ForcedAnchor {
 
 const ANCHOR_MARGIN = 14;
 
+/** Smallest comfortable distance between two attachment points on one border. */
+export const PORT_GAP = 18;
+
 /** Usable stretch of a border that anchors may slide along. */
 export function sideRange(box: Rect, side: EdgeSide): { min: number; max: number } {
   if (side === "left" || side === "right") {
@@ -320,6 +323,199 @@ export function sideMidpoint(box: Rect, side: EdgeSide): Point {
   if (side === "right") return { x: box.x + box.w, y: cy };
   if (side === "top") return { x: cx, y: box.y };
   return { x: cx, y: box.y + box.h };
+}
+
+/** A border point at `along` (y for left/right, x for top/bottom), kept on the border. */
+export function sidePoint(box: Rect, side: EdgeSide, along: number): Point {
+  const range = sideRange(box, side);
+  const value = clampNumber(along, range.min, range.max);
+  if (side === "left") return { x: box.x, y: value };
+  if (side === "right") return { x: box.x + box.w, y: value };
+  if (side === "top") return { x: value, y: box.y };
+  return { x: value, y: box.y + box.h };
+}
+
+/** Where a point projects onto a border, clamped into its usable stretch. */
+export function sideAlong(box: Rect, side: EdgeSide, point: Point): number {
+  const range = sideRange(box, side);
+  return clampNumber(side === "left" || side === "right" ? point.y : point.x, range.min, range.max);
+}
+
+/**
+ * Attachment positions for `count` groups sharing one border. They sit
+ * symmetrically around the side midpoint and shrink their step when the border
+ * is crowded, so every group keeps its own point inside the usable stretch.
+ */
+export function portPositions(box: Rect, side: EdgeSide, count: number, gap = PORT_GAP): number[] {
+  if (count <= 0) return [];
+  const range = sideRange(box, side);
+  const mid = (range.min + range.max) / 2;
+  if (count === 1) return [mid];
+  const step = Math.min(gap, (range.max - range.min) / (count - 1));
+  const start = mid - (step * (count - 1)) / 2;
+  return Array.from({ length: count }, (_, index) => start + index * step);
+}
+
+export interface PortGroup {
+  key: string;
+  /** Preferred coordinate along the border; orders groups on the rail. */
+  desired?: number;
+}
+
+export interface SidePort {
+  key: string;
+  side: EdgeSide;
+  point: Point;
+}
+
+/**
+ * Give every group on a border its own attachment point. Callers put inbound
+ * and outbound edges in different groups, so a line entering a node can never
+ * sit on top of a line leaving it.
+ */
+export function planSidePorts(
+  box: Rect,
+  side: EdgeSide,
+  groups: PortGroup[],
+  gap = PORT_GAP,
+): SidePort[] {
+  const ordered = [...groups].sort((a, b) => {
+    const delta = (a.desired ?? 0) - (b.desired ?? 0);
+    if (delta) return delta;
+    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+  });
+  const positions = portPositions(box, side, ordered.length, gap);
+  return ordered.map((group, index) => ({
+    key: group.key,
+    side,
+    point: sidePoint(box, side, positions[index]!),
+  }));
+}
+
+/** A smart-guide line drawn while a drag is snapped into alignment. */
+export interface AlignmentGuide {
+  /** A vertical line when `x`, a horizontal one when `y`. */
+  axis: "x" | "y";
+  /** Where the line sits on its axis (world coordinates). */
+  at: number;
+  /** Extent of the line along the other axis, already padded past both boxes. */
+  from: number;
+  to: number;
+}
+
+export interface SnapResult {
+  dx: number;
+  dy: number;
+  guides: AlignmentGuide[];
+}
+
+const GUIDE_PAD = 10;
+/** Slack used when deciding which boxes a guide line spans. */
+const GUIDE_EPSILON = 0.5;
+
+function unionOf(rects: Rect[]): Rect | null {
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const rect of rects) {
+    left = Math.min(left, rect.x);
+    top = Math.min(top, rect.y);
+    right = Math.max(right, rect.x + rect.w);
+    bottom = Math.max(bottom, rect.y + rect.h);
+  }
+  if (!Number.isFinite(left)) return null;
+  return { x: left, y: top, w: right - left, h: bottom - top };
+}
+
+/** The three lines of a box that other boxes may align to. */
+function anchorsOf(box: Rect, axis: "x" | "y"): number[] {
+  if (axis === "x") return [box.x, box.x + box.w / 2, box.x + box.w];
+  return [box.y, box.y + box.h / 2, box.y + box.h];
+}
+
+/**
+ * Smart guides for dragging. `moving` are the pre-drag boxes, `targets` the
+ * boxes that stay put; the drag delta is nudged (at most `threshold` on each
+ * axis, independently) so a border or centre of the moving set lands exactly on
+ * a matching line of another box. The returned guides span every box sharing
+ * that line, so the UI can draw one continuous rule.
+ */
+export function snapAlignment(
+  moving: Rect[],
+  targets: Rect[],
+  dx: number,
+  dy: number,
+  threshold: number,
+): SnapResult {
+  if (!moving.length || !targets.length || !(threshold > 0)) return { dx, dy, guides: [] };
+  const moved = moving.map((rect): Rect => ({ ...rect, x: rect.x + dx, y: rect.y + dy }));
+  const group = unionOf(moved);
+  if (!group) return { dx, dy, guides: [] };
+
+  const closest = (axis: "x" | "y"): { delta: number; at: number } | null => {
+    // Candidate lines come from every moved box plus the group's own bounds, so
+    // a multi-selection can also align its joint centre to another box.
+    const sources = [...moved.flatMap((box) => anchorsOf(box, axis)), ...anchorsOf(group, axis)];
+    let best: { delta: number; at: number } | null = null;
+    for (const target of targets) {
+      for (const at of anchorsOf(target, axis)) {
+        for (const source of sources) {
+          const delta = at - source;
+          if (Math.abs(delta) > threshold) continue;
+          if (!best || Math.abs(delta) < Math.abs(best.delta)) best = { delta, at };
+        }
+      }
+    }
+    return best;
+  };
+
+  const snapX = closest("x");
+  const snapY = closest("y");
+  const snapped = {
+    x: group.x + (snapX?.delta ?? 0),
+    y: group.y + (snapY?.delta ?? 0),
+    w: group.w,
+    h: group.h,
+  };
+
+  const span = (axis: "x" | "y", at: number): { from: number; to: number } | null => {
+    let from = Infinity;
+    let to = -Infinity;
+    for (const box of [...moved, ...targets]) {
+      if (!anchorsOf(box, axis).some((value) => Math.abs(value - at) < GUIDE_EPSILON)) continue;
+      if (axis === "x") {
+        from = Math.min(from, box.y);
+        to = Math.max(to, box.y + box.h);
+      } else {
+        from = Math.min(from, box.x);
+        to = Math.max(to, box.x + box.w);
+      }
+    }
+    return Number.isFinite(from) ? { from, to } : null;
+  };
+
+  const guides: AlignmentGuide[] = [];
+  if (snapX) {
+    const line = span("x", snapX.at);
+    if (line) guides.push({
+      axis: "x",
+      at: snapX.at,
+      from: Math.min(line.from, snapped.y) - GUIDE_PAD,
+      to: Math.max(line.to, snapped.y + snapped.h) + GUIDE_PAD,
+    });
+  }
+  if (snapY) {
+    const line = span("y", snapY.at);
+    if (line) guides.push({
+      axis: "y",
+      at: snapY.at,
+      from: Math.min(line.from, snapped.x) - GUIDE_PAD,
+      to: Math.max(line.to, snapped.x + snapped.w) + GUIDE_PAD,
+    });
+  }
+
+  return { dx: dx + (snapX?.delta ?? 0), dy: dy + (snapY?.delta ?? 0), guides };
 }
 
 export function primarySide(box: NodeBox, other: NodeBox): EdgeSide {

@@ -57,6 +57,7 @@ export {
   GROUP_HEAD,
   GROUP_PAD,
   PAIR_SPREAD,
+  PORT_GAP,
   anchorPoint,
   autoLayout,
   bezierAt,
@@ -69,11 +70,17 @@ export {
   indexPairs,
   pairKey,
   pathOf,
+  planSidePorts,
+  portPositions,
+  sideAlong,
+  sidePoint,
   sideRange,
   sideMidpoint,
   primarySide,
+  snapAlignment,
 } from "./geometry.js";
 export type {
+  AlignmentGuide,
   BoxOptions,
   EdgeGeometry,
   EdgeSide,
@@ -82,5 +89,7 @@ export type {
   LayoutOptions,
   NodeBox,
   OrthogonalRoute,
+  PortGroup,
   Rect,
+  SidePort,
 } from "./geometry.js";
