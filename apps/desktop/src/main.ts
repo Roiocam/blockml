@@ -72,6 +72,7 @@ let autoSave = localStorage.getItem("blockml.autosave") !== "0";
 let theme: "light" | "dark" = initialTheme();
 type RouteStyle = "curve" | "orthogonal";
 let route: RouteStyle = localStorage.getItem("blockml.route") === "orthogonal" ? "orthogonal" : "curve";
+let mode: "presentation" | "editing" = "editing";
 
 autoSaveInput.checked = autoSave;
 
@@ -371,6 +372,13 @@ function bindEvents(): void {
     route = routeSelect.value === "orthogonal" ? "orthogonal" : "curve";
     localStorage.setItem("blockml.route", route);
     viewer.setRoute(route);
+  });
+  const modeButton = byId("mode");
+  modeButton.addEventListener("click", () => {
+    mode = mode === "presentation" ? "editing" : "presentation";
+    viewer.setMode(mode);
+    document.body.dataset.mode = mode;
+    modeButton.textContent = mode === "presentation" ? "编辑" : "预览";
   });
   themeButton.addEventListener("click", () => applyTheme(theme === "dark" ? "light" : "dark"));
 
