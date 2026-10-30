@@ -116,6 +116,14 @@ describe("diagnostics", () => {
     expect(hasErrors(result.diagnostics)).toBe(false);
   });
 
+  it("treats route as a viewer option, not a document key", () => {
+    const result = parse(`diagram { route: orthogonal }`);
+    expect(result.diagnostics.map((x) => x.code)).toEqual(["BLK005"]);
+    expect(result.diagnostics[0]?.hint).toContain("--route");
+    expect(result.document.diagram && "route" in result.document.diagram).toBe(false);
+    expect(serialize(result.document)).not.toContain("route");
+  });
+
   it("keeps x- extension properties", () => {
     const d = doc(`node a "A" {\n  x-owner: "team-x"\n}`);
     expect(d.nodes[0]?.extra).toEqual({ "x-owner": "team-x" });

@@ -17,7 +17,7 @@ blockml --help
 | 命令 | 作用 |
 | --- | --- |
 | `blockml validate <file...>` | 校验语法与引用，输出诊断 |
-| `blockml render <file> [-o out.html] [--route curve\|orthogonal]` | 生成可双击的单文件阅读器（viewer 内联，无外部依赖；默认演示态） |
+| `blockml render <file> [-o out.html] [--route curve\|orthogonal]` | 生成可双击的单文件阅读器（viewer 内联，无外部依赖；默认演示态；`--route` 只设初始走线，可在工具条切换） |
 | `blockml fmt <file> [--write]` | 规范化格式（会丢弃注释，加 `--write` 才落盘） |
 | `blockml layout <file> [--algo <name>] [--write]` | 破坏性整体重排并回写 `at` 坐标 |
 | `blockml inspect <file>` | 打印结构摘要 |

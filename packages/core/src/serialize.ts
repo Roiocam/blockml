@@ -96,7 +96,6 @@ export function serialize(doc: BlockDocument): string {
     if (diagram.subtitle) props.push(`subtitle: ${quote(diagram.subtitle)}`);
     if (diagram.theme !== "light") props.push(`theme: ${diagram.theme}`);
     if (diagram.direction !== "TB") props.push(`direction: ${diagram.direction}`);
-    if (diagram.route !== "curve") props.push(`route: ${diagram.route}`);
     if (diagram.version !== "1.0") props.push(`version: ${quote(diagram.version)}`);
     for (const [key, value] of Object.entries(diagram.extra)) {
       props.push(`${key}: ${serializeExtra(value)}`);

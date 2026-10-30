@@ -16,6 +16,7 @@ export interface Point {
 
 export type ThemeName = "light" | "dark" | "auto";
 export type Direction = "TB" | "LR";
+/** Rendering choice for the viewer/app; not part of the document language. */
 export type RouteStyle = "curve" | "orthogonal";
 
 export interface DiagramDecl {
@@ -24,7 +25,6 @@ export interface DiagramDecl {
   subtitle: string | null;
   theme: ThemeName;
   direction: Direction;
-  route: RouteStyle;
   version: string;
   line: number;
   extra: Record<string, unknown>;

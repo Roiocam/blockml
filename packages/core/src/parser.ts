@@ -8,7 +8,6 @@ import type {
   NodeDecl,
   ParseResult,
   Point,
-  RouteStyle,
   ThemeName,
   Direction,
 } from "./ast.js";
@@ -35,7 +34,7 @@ type Value =
 const NODE_ATTRS = new Set(["group", "kind", "label", "tech", "at", "note", "src", "tags"]);
 const EDGE_ATTRS = new Set(["kind", "label", "via", "dash", "bundle", "note", "src"]);
 const GROUP_ATTRS = new Set(["color", "label", "note", "src"]);
-const DIAGRAM_ATTRS = new Set(["title", "subtitle", "theme", "direction", "route", "version"]);
+const DIAGRAM_ATTRS = new Set(["title", "subtitle", "theme", "direction", "version"]);
 
 const COLOR_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
@@ -346,19 +345,27 @@ class Parser {
   }
 
   private buildDiagram(title: string | null, props: Map<string, Value>, anchor: Token): DiagramDecl {
+    const routeValue = props.get("route");
+    if (routeValue) {
+      this.warn(
+        "BLK005",
+        `diagram 不支持属性 "route"，已忽略`,
+        { ...anchor, line: routeValue.line, column: anchor.column },
+        "走线风格是查看器选项：在工具条切换曲线/正交，或在 CLI 加 --route orthogonal",
+      );
+      props.delete("route");
+    }
     const extra = this.collectExtra(props, DIAGRAM_ATTRS, "diagram", anchor);
     const themeRaw = asIdent(props.get("theme")) ?? "light";
     const theme: ThemeName = themeRaw === "dark" || themeRaw === "auto" ? themeRaw : "light";
     const directionRaw = (asIdent(props.get("direction")) ?? "TB").toUpperCase();
     const direction: Direction = directionRaw === "LR" ? "LR" : "TB";
-    const route: RouteStyle = asIdent(props.get("route")) === "orthogonal" ? "orthogonal" : "curve";
     return {
       type: "diagram",
       title: asString(props.get("title")) ?? title,
       subtitle: asString(props.get("subtitle")),
       theme,
       direction,
-      route,
       version: asString(props.get("version")) ?? "1.0",
       line: anchor.line,
       extra,

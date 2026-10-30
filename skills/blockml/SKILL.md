@@ -16,13 +16,13 @@ BlockML 是给架构图用的 diagram-as-code：作者只写**语义**（有哪�
 ## 工作流
 
 1. **先划范围**：这张图回答什么问题？选 6–16 个块。超过 20 个先分两张。
-2. **写 `.blockml`**：先 `group`，再 `node`，最后 `edge`。**不要写 `at` / `via` / `color` / `theme` / `dash` / `route`**——布局和线型交给平台。
+2. **写 `.blockml`**：先 `group`，再 `node`，最后 `edge`。**不要写 `at` / `via` / `color` / `theme` / `dash`**——布局交给平台；走线风格（曲线 / 正交）是阅读器选项，不写进文件。
 3. **每条断言挂 `src`**：节点/边只要说了「谁连谁、跑在哪、几个连接池」这类事实，就要能被 `文件:行` 或文档章节指到。没有出处的断言不要写进图。
 4. **自检**：`node <blockml-repo>/packages/cli/bin.mjs validate <file>`，error 必须清零，warning 逐条确认。
 5. **交付**：`node <blockml-repo>/packages/cli/bin.mjs render <file> -o <out.html>`，把 HTML 路径给用户。HTML 默认打开为**演示态**（无点阵网格、无折叠点、无控制点手柄，节点不可拖）；顶部「编辑」可切到编辑态，拖动后点「下载源码」拿回带坐标的 `.blockml`。分组折叠与「图层」隐藏只影响视图，不写回文件。
 6. **需要另一套整体排法时**（可选）：`node <blockml-repo>/packages/cli/bin.mjs layout <file> --algo layered|pipeline|snowflake|compact --write`。这是破坏性重排，会覆盖所有已有坐标；不要为了「微调」跑它。
 
-> 走线风格是查看器预设，不是文档语义：`render <file> --route orthogonal` 生成 draw.io 式正交布线，默认 `curve` 贝塞尔。不要在 `.blockml` 里写 `route:`。
+> 走线风格是渲染期选择，不是文档语义：阅读器 / 桌面 App 工具条可在「曲线 / 正交」间切换，`render <file> --route orthogonal` 只设打开时的初始风格（默认 `curve` 贝塞尔）。`route` 不是文档键；旧文件里写了会被忽略并提示。
 > 两种风格共用侧端口：同一侧 ≥3 条边也只有一入一出两个普通附着点；端点沿边框法线出线（偏差 ≤0.5°）；标签不压节点/组头/其它标签；线不穿过非端点节点；交叉统一跳弧。这些都由平台保证，不要用 `via` 去「修」。
 > 汇流：一个节点连同一组里的多个对端时，给这几条边加同名 `bundle: <name>`，会画成一条主干再分叉；`curve` 与 `orthogonal` 都生效。主干会穿过其它节点时只保留共享吸附点，各边分别绕行。
 > 仓库在本地时用上面的完整路径；把 `@block-ml/cli` 装到 PATH 之后，可以直接用 `blockml validate` / `blockml render`。
@@ -67,7 +67,8 @@ edge gw -> order "REST /v1/orders" {
 | 一块图 6–16 个节点 | 超过就分成「全景 + 局部」两张 |
 | 一个 `group` 只装同一层的东西 | 组框是成员节点的包围盒，层级混在一起会散 |
 | `tech` 只写一行、≤ 24 字 | 卡片里放不下，详情面板才有 `note` |
-| 不写 `at` / `via` / `dash` / `color` / `theme` / `route` | 这些是编辑器回写或旧文件兼容键；新文档只留语义 |
+| 不写 `at` / `via` / `dash` / `color` / `theme` | 这些是编辑器回写或旧文件兼容键；新文档只留语义 |
+| 不写 `route` | 走线风格是阅读器工具条选项，不是文档键；写了会被警告并忽略 |
 | 同一对节点多条边不用手写偏移 | 平台自动分配端口并错开 |
 | 不确定的 kind 用 `ext` | 未知 kind 会降级并产生 warning |
 | 自定义字段一律加 `x-` 前缀 | 未知属性只报 warning，但会丢值 |

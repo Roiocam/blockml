@@ -234,6 +234,10 @@
       <option value="snowflake">雪花形</option>
       <option value="compact">紧凑型</option>
     </select>
+    <select id="blockml-route" title="走线风格">
+      <option value="curve" selected>曲线</option>
+      <option value="orthogonal">正交</option>
+    </select>
     <button data-act="fit">适应窗口</button>
     <button data-act="zoom-in">＋</button>
     <button data-act="zoom-out">－</button>
@@ -558,7 +562,7 @@ var BlockML = (() => {
   var NODE_ATTRS = /* @__PURE__ */ new Set(["group", "kind", "label", "tech", "at", "note", "src", "tags"]);
   var EDGE_ATTRS = /* @__PURE__ */ new Set(["kind", "label", "via", "dash", "bundle", "note", "src"]);
   var GROUP_ATTRS = /* @__PURE__ */ new Set(["color", "label", "note", "src"]);
-  var DIAGRAM_ATTRS = /* @__PURE__ */ new Set(["title", "subtitle", "theme", "direction", "route", "version"]);
+  var DIAGRAM_ATTRS = /* @__PURE__ */ new Set(["title", "subtitle", "theme", "direction", "version"]);
   var COLOR_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
   var Parser = class {
     tokens;
@@ -843,19 +847,27 @@ var BlockML = (() => {
       return extra;
     }
     buildDiagram(title, props, anchor) {
+      const routeValue = props.get("route");
+      if (routeValue) {
+        this.warn(
+          "BLK005",
+          `diagram \u4E0D\u652F\u6301\u5C5E\u6027 "route"\uFF0C\u5DF2\u5FFD\u7565`,
+          { ...anchor, line: routeValue.line, column: anchor.column },
+          "\u8D70\u7EBF\u98CE\u683C\u662F\u67E5\u770B\u5668\u9009\u9879\uFF1A\u5728\u5DE5\u5177\u6761\u5207\u6362\u66F2\u7EBF/\u6B63\u4EA4\uFF0C\u6216\u5728 CLI \u52A0 --route orthogonal"
+        );
+        props.delete("route");
+      }
       const extra = this.collectExtra(props, DIAGRAM_ATTRS, "diagram", anchor);
       const themeRaw = asIdent(props.get("theme")) ?? "light";
       const theme = themeRaw === "dark" || themeRaw === "auto" ? themeRaw : "light";
       const directionRaw = (asIdent(props.get("direction")) ?? "TB").toUpperCase();
       const direction = directionRaw === "LR" ? "LR" : "TB";
-      const route = asIdent(props.get("route")) === "orthogonal" ? "orthogonal" : "curve";
       return {
         type: "diagram",
         title: asString(props.get("title")) ?? title,
         subtitle: asString(props.get("subtitle")),
         theme,
         direction,
-        route,
         version: asString(props.get("version")) ?? "1.0",
         line: anchor.line,
         extra
@@ -1421,6 +1433,28 @@ var BlockML = (() => {
     const span = distance(p1, p2);
     return Math.max(CURVE_SAMPLES, Math.min(CURVE_SAMPLES_MAX, Math.ceil(span / 4)));
   }
+  var CURVE_ESCAPE = 96;
+  function curveBounds(rects) {
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const rect of rects) {
+      x0 = Math.min(x0, rect.x);
+      y0 = Math.min(y0, rect.y);
+      x1 = Math.max(x1, rect.x + rect.w);
+      y1 = Math.max(y1, rect.y + rect.h);
+    }
+    if (!Number.isFinite(x0)) return null;
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+  function curveWithinBounds(geo, bounds) {
+    if (!bounds) return true;
+    for (const point of sampleEdgePath(geo, 48)) {
+      if (point.x < bounds.x - CURVE_ESCAPE || point.x > bounds.x + bounds.w + CURVE_ESCAPE || point.y < bounds.y - CURVE_ESCAPE || point.y > bounds.y + bounds.h + CURVE_ESCAPE) return false;
+    }
+    return true;
+  }
   function curveCrossings(geo, obstacles) {
     let hits = 0;
     for (const point of sampleEdgePath(geo, curveSampleCount(geo.p1, geo.p2))) {
@@ -1513,8 +1547,10 @@ var BlockML = (() => {
     const junction = ctx.junctions?.get(edge.id);
     const control = junction?.point ?? base;
     const obstacles = (ctx.obstacles ?? []).filter((item) => item.id !== edge.from && item.id !== edge.to).map((item) => item.rect);
+    const bounds = curveBounds([...obstacles, fromBox, toBox]);
+    const fits = (geo) => curveCrossings(geo, obstacles) === 0 && curveWithinBounds(geo, bounds);
     const first = buildCurve(p1, side1, p2, side2, control, spread, junction);
-    if (!obstacles.length || curveCrossings(first, obstacles) === 0) return first;
+    if (!obstacles.length || fits(first)) return first;
     if (!junction) {
       const candidates = [];
       for (const along of [0, 70, -70, 140, -140]) {
@@ -1532,18 +1568,7 @@ var BlockML = (() => {
       candidates.sort((a, b) => a.distance - b.distance);
       for (const candidate of candidates) {
         const geo = buildCurve(p1, side1, p2, side2, candidate.point, spread);
-        if (curveCrossings(geo, obstacles) === 0) return geo;
-      }
-      for (const radius of [400, 480, 560, 640, 720, 800]) {
-        for (const angle of [0, 45, -45, 90, -90, 135, -135, 180]) {
-          const rad = angle * Math.PI / 180;
-          const point = {
-            x: base.x + px * radius * Math.cos(rad) + vx / len * radius * Math.sin(rad),
-            y: base.y + py * radius * Math.cos(rad) + vy / len * radius * Math.sin(rad)
-          };
-          const geo = buildCurve(p1, side1, p2, side2, point, spread);
-          if (curveCrossings(geo, obstacles) === 0) return geo;
-        }
+        if (fits(geo)) return geo;
       }
     }
     return detourGeometry(edge, ctx, obstacles, control, spread) ?? first;
@@ -1847,6 +1872,13 @@ var BlockML = (() => {
     if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? "right" : "left";
     return dy >= 0 ? "bottom" : "top";
   }
+  var EDGE_SIDES = ["left", "right", "top", "bottom"];
+  function sidePenalty(side, box, other) {
+    const wanted = primarySide(box, other);
+    if (side === wanted) return 0;
+    const opposite = wanted === "left" ? "right" : wanted === "right" ? "left" : wanted === "top" ? "bottom" : "top";
+    return side === opposite ? 60 : 20;
+  }
   function planCurveSides(document2, options = {}) {
     const box = options.box ?? DEFAULT_BOX;
     const result = /* @__PURE__ */ new Map();
@@ -1873,7 +1905,7 @@ var BlockML = (() => {
     const trial = (edge, fromSide, toSide) => {
       const fromBox = boxes.get(edge.from);
       const toBox = boxes.get(edge.to);
-      if (!fromBox || !toBox) return false;
+      if (!fromBox || !toBox) return null;
       const fromPoint = sidePoint(fromBox, fromSide, sideAlong(fromBox, fromSide, { x: toBox.cx, y: toBox.cy }));
       const toPoint = sidePoint(toBox, toSide, sideAlong(toBox, toSide, { x: fromBox.cx, y: fromBox.cy }));
       const geo = edgeGeometry(edge, {
@@ -1887,24 +1919,24 @@ var BlockML = (() => {
           to: { side: toSide, point: toPoint }
         }]])
       });
-      if (!geo || geo.detour) return false;
+      if (!geo || geo.detour) return null;
       const points = sampleEdgePath(geo, 96);
       let pathLength = 0;
       for (let i = 1; i < points.length; i++) {
         pathLength += distance(points[i - 1], points[i]);
       }
       const direct = distance(fromPoint, toPoint);
-      if (pathLength > Math.max(direct * 2.2, direct + 260)) return false;
+      if (pathLength > Math.max(direct * 2.2, direct + 260)) return null;
       const own = /* @__PURE__ */ new Set([edge.from, edge.to]);
       for (const point of points) {
-        if (bounds && (point.x < bounds.x - margin || point.x > bounds.x + bounds.w + margin || point.y < bounds.y - margin || point.y > bounds.y + bounds.h + margin)) return false;
+        if (bounds && (point.x < bounds.x - margin || point.x > bounds.x + bounds.w + margin || point.y < bounds.y - margin || point.y > bounds.y + bounds.h + margin)) return null;
         for (let i = 0; i < blockers.length; i++) {
           if (own.has(obstacles[i].id)) continue;
           const rect = blockers[i];
-          if (point.x > rect.x + 1 && point.x < rect.x + rect.w - 1 && point.y > rect.y + 1 && point.y < rect.y + rect.h - 1) return false;
+          if (point.x > rect.x + 1 && point.x < rect.x + rect.w - 1 && point.y > rect.y + 1 && point.y < rect.y + rect.h - 1) return null;
         }
       }
-      return true;
+      return pathLength;
     };
     for (const edge of document2.edges) {
       const fromBox = boxes.get(edge.from);
@@ -1915,9 +1947,25 @@ var BlockML = (() => {
         from: primarySide(fromBox, toBox),
         to: primarySide(toBox, fromBox)
       };
-      if (!forced?.from && !forced?.to && trial(edge, primary.from, primary.to)) {
-        result.set(edge.id, primary);
-        continue;
+      if (!forced?.from && !forced?.to) {
+        if (trial(edge, primary.from, primary.to) !== null) {
+          result.set(edge.id, primary);
+          continue;
+        }
+        let best = null;
+        for (const fromSide of EDGE_SIDES) {
+          for (const toSide of EDGE_SIDES) {
+            if (fromSide === primary.from && toSide === primary.to) continue;
+            const length = trial(edge, fromSide, toSide);
+            if (length === null) continue;
+            const score = sidePenalty(fromSide, fromBox, toBox) + sidePenalty(toSide, toBox, fromBox) + length * 0.03;
+            if (!best || score < best.score) best = { sides: { from: fromSide, to: toSide }, score };
+          }
+        }
+        if (best) {
+          result.set(edge.id, best.sides);
+          continue;
+        }
       }
       const route = orthogonalRoute(edge, {
         byId,
@@ -3006,6 +3054,7 @@ var BlockML = (() => {
       this.options = options;
       this.source = options.source;
       this.mode = options.mode ?? "editing";
+      this.routeStyle = options.route ?? "curve";
       this.root = document.createElement("div");
       this.root.className = "bml-root";
       this.root.dataset.bmlTheme = options.theme ?? "light";
@@ -3246,7 +3295,6 @@ var BlockML = (() => {
     }
     render() {
       if (!this.doc || !this.viewDoc) return;
-      this.routeStyle = this.options.route ?? this.doc.diagram?.route ?? "curve";
       this.nodeEls.clear();
       this.edgeEls.clear();
       this.groupEls.clear();
@@ -4819,6 +4867,14 @@ var BlockML = (() => {
     getMode() {
       return this.mode;
     }
+    setRoute(style) {
+      if (this.routeStyle === style) return;
+      this.routeStyle = style;
+      this.render();
+    }
+    getRoute() {
+      return this.routeStyle;
+    }
     toSVG() {
       const clone = this.svg.cloneNode(true);
       clone.setAttribute("xmlns", SVGNS);
@@ -4986,6 +5042,7 @@ ${darkRules}`;
     const theme = options.theme ?? "light";
     const readOnly = options.readOnly ?? false;
     const mode = options.mode ?? "presentation";
+    const route = options.route ?? "curve";
     const routeOption = options.route ? `,
     route: "${options.route}"` : "";
     const modeButton = readOnly ? "" : `<button data-act="mode" title="\u5207\u6362\u7F16\u8F91 / \u9884\u89C8">${mode === "presentation" ? "\u7F16\u8F91" : "\u9884\u89C8"}</button>`;
@@ -5051,6 +5108,10 @@ ${options.viewerCss}
       <option value="snowflake">\u96EA\u82B1\u5F62</option>
       <option value="compact">\u7D27\u51D1\u578B</option>
     </select>
+    <select id="blockml-route" title="\u8D70\u7EBF\u98CE\u683C">
+      <option value="curve"${route === "curve" ? " selected" : ""}>\u66F2\u7EBF</option>
+      <option value="orthogonal"${route === "orthogonal" ? " selected" : ""}>\u6B63\u4EA4</option>
+    </select>
     <button data-act="fit">\u9002\u5E94\u7A97\u53E3</button>
     <button data-act="zoom-in">\uFF0B</button>
     <button data-act="zoom-out">\uFF0D</button>
@@ -5106,6 +5167,9 @@ ${visibilityJson ? `<script id="blockml-visibility" type="application/json">${vi
     var algorithm = event.target.value;
     if (!algorithm) return;
     handle.layout(algorithm);
+  });
+  document.getElementById("blockml-route").addEventListener("change", function(event){
+    handle.setRoute(event.target.value);
   });
   document.getElementById("blockml-bar").addEventListener("click", function(event){
     var button = event.target.closest("button[data-act]");
@@ -5167,6 +5231,9 @@ ${visibilityJson ? `<script id="blockml-visibility" type="application/json">${vi
     var algorithm = event.target.value;
     if (!algorithm) return;
     handle.layout(algorithm);
+  });
+  document.getElementById("blockml-route").addEventListener("change", function(event){
+    handle.setRoute(event.target.value);
   });
   document.getElementById("blockml-bar").addEventListener("click", function(event){
     var button = event.target.closest("button[data-act]");

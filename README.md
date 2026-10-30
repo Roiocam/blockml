@@ -42,7 +42,7 @@ node packages/cli/bin.mjs render examples/order-platform.blockml -o out/order-pl
 
 产物是一个自包含 HTML：内联 CSS 和 JS、零外部依赖、内网双击即看。打开默认是**演示态**——没有点阵网格、分组折叠点和连线控制点手柄，节点也不会被误拖；顶部「编辑」可切到编辑态（可在四种排列算法之间切换），点「预览」切回。画布上可以拖节点、拖连线控制点；Shift / Ctrl 点选，或 Shift+拖拽在空白处框选多个节点（Cmd/Ctrl+A 全选），选中节点会带高亮底色，选中 ≥2 个会出现多选工具条，可纵向 / 横向对齐、水平 / 垂直等距，多选后能整组拖动；拖动时靠近其它节点的边或中线会自动吸附并画出对齐线（按住 Alt 临时关闭吸附）；改完点「下载源码」拿回带坐标的 `.blockml`。
 
-渲染质量由平台统一保证，不依赖作者手写样式：曲线与正交共用侧端口（同一侧 ≥3 条边也只有一入一出两个普通附着点，`bundle` 另占一个），每条边沿边框法线出线（偏差 ≤ 0.5°），连线不穿过非端点节点，所有交叉处画跳弧，标签中心距本边路径 ≤ 8px 且不压节点 / 分组标题 / 其它标签，适应窗口会把连线和标签一起收进来。连线颜色从起点节点色（浅）过渡到终点节点色（实色），箭头取终点色；边 kind 只决定实线 / 虚线 / 点线。悬停或选中节点会高亮与它相连的边；每个分组框右上角可以折叠成带计数的胶囊，「图层」面板能逐个隐藏分组或节点（只影响视图，不改源码）。走线风格是查看器预设：`render --route orthogonal` 切到 draw.io 式的正交走线（圆角转折、跨线跳弧），默认 `curve` 贝塞尔；不要在 `.blockml` 里写 `route:`。
+渲染质量由平台统一保证，不依赖作者手写样式：曲线与正交共用侧端口（同一侧 ≥3 条边也只有一入一出两个普通附着点，`bundle` 另占一个），每条边沿边框法线出线（偏差 ≤ 0.5°），连线不穿过非端点节点，所有交叉处画跳弧，标签中心距本边路径 ≤ 8px 且不压节点 / 分组标题 / 其它标签，适应窗口会把连线和标签一起收进来。连线颜色从起点节点色（浅）过渡到终点节点色（实色），箭头取终点色；边 kind 只决定实线 / 虚线 / 点线。悬停或选中节点会高亮与它相连的边；每个分组框右上角可以折叠成带计数的胶囊，「图层」面板能逐个隐藏分组或节点（只影响视图，不改源码）。走线风格是渲染期选择：阅读器工具条可在「曲线 / 正交」之间即时切换（正交为 draw.io 式圆角转折、跨线跳弧），`render --route orthogonal` 只是设打开时的初始风格；`route` 不是文档键，旧文件里的 `diagram.route` 会被忽略并提示。
 
 仓库里有一份渲染好的示例：[`examples/order-platform.html`](examples/order-platform.html)（虚构的电商订单平台，源码同名 `.blockml`，不含任何手写坐标或样式键）。
 
@@ -87,7 +87,7 @@ edge  <from> -> <to> "标签" { kind:, bundle:, note:, src: }
 ```
 
 - 没有属性的块可以写成一行，`{ }` 省略。
-- 作者只写语义；默认布局按 group 分列，坐标由平台生成。`at` / `via` / `dash` / `color` / `theme` / `route` 是编辑器回写或旧文件兼容键，新文档不写。
+- 作者只写语义；默认布局按 group 分列，坐标由平台生成。`at` / `via` / `dash` / `color` / `theme` 是编辑器回写或旧文件兼容键，新文档不写；走线风格（曲线 / 正交）是查看器选项，`route` 不是文档键。
 - 同一侧多条边、标签避让、跳弧都由平台统一处理；`bundle` 是语义属性，两种走线都生效。
 - 未知 kind 降级 + warning；未知属性警告并忽略；`x-` 前缀字段原样保留。
 - 完整规范：[`spec/blockml-spec-v1.md`](spec/blockml-spec-v1.md)
@@ -97,7 +97,7 @@ edge  <from> -> <to> "标签" { kind:, bundle:, note:, src: }
 ```
 CHANGELOG.md                  版本变更记录
 spec/
-  blockml-spec-v1.md          语言规范（normative，当前 v1.3）
+  blockml-spec-v1.md          语言规范（normative，当前 v1.4）
 examples/
   order-platform.blockml      虚构的电商订单平台（可直接渲染）
   order-platform.html         渲染成品，可双击打开
@@ -118,7 +118,7 @@ skills/
 | 命令 | 作用 |
 | --- | --- |
 | `blockml validate <file...>` | 语法与引用检查，error 退出码 1 |
-| `blockml render <file> [-o out.html] [--route curve\|orthogonal]` | 生成自包含阅读器（默认演示态） |
+| `blockml render <file> [-o out.html] [--route curve\|orthogonal]` | 生成自包含阅读器（默认演示态；`--route` 只设初始走线，可在工具条切换） |
 | `blockml layout <file> [--algo layered\|pipeline\|snowflake\|compact] [--write]` | 用算法整体重排并回写 `at`（破坏性，`via` 仅兼容保留） |
 | `blockml inspect <file>` | 打印规模、kind 分布、缺坐标/缺出处的节点数 |
 | `blockml fmt <file> [--write]` | 规范化输出（会丢弃注释，默认只打印） |

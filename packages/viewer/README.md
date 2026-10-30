@@ -20,7 +20,7 @@ const handle = mount(document.getElementById("canvas")!, {
   source: text,                 // .blockml 源码
   theme: "light",               // light | dark
   mode: "presentation",         // 嵌入编辑器时可用 editing
-  route: "orthogonal",          // 可选：curve（默认）| orthogonal
+  route: "orthogonal",          // 初始走线：curve（默认）| orthogonal；可用 handle.setRoute() 切换
   onSourceChange: (next) => save(next), // 拖动后回写
 });
 
@@ -66,7 +66,7 @@ const html = renderStandaloneHTML({
 });
 ```
 
-也可以直接用命令行：`blockml render your.blockml -o your.html`（默认演示态，`--route` 选择走线预设，`--readonly` 隐藏编辑切换）。
+也可以直接用命令行：`blockml render your.blockml -o your.html`（默认演示态，`--route` 只设初始走线风格，阅读器工具条可随时切换，`--readonly` 隐藏编辑切换）。
 
 ## 相关包
 
