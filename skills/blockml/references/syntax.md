@@ -47,7 +47,7 @@ edge  <from> -> <to> "标签" { … }  // 0..n 个
 | `subtitle` | string | — | 副标题 |
 | `theme` | ident | `light` | `light` / `dark` |
 | `direction` | ident | `TB` | 自动布局方向 |
-| `route` | ident | `curve` | `curve` 贝塞尔 / `orthogonal` 正交（入/出站分点吸附、圆角转折、跨线跳弧） |
+| `route` | ident | `curve` | `curve` 贝塞尔 / `orthogonal` 正交（入/出站分点吸附、圆角转折、跨线跳弧；两种风格都不穿过非端点节点） |
 | `version` | string | `"1.0"` | 规范版本 |
 
 ### group
@@ -77,7 +77,7 @@ edge  <from> -> <to> "标签" { … }  // 0..n 个
 | `kind` | ident | `rest` | 见 kinds.md |
 | `via` | pair | `0, 0` | 相对两端点**中点**的偏移 |
 | `dash` | boolean | 按 kind | 强制虚线 |
-| `bundle` | ident | — | 同名边汇流成一条主干再分叉（仅 `route: orthogonal`） |
+| `bundle` | ident | — | 同名边汇流成一条主干再分叉（仅 `route: orthogonal`；主干压节点时只共享吸附点） |
 | `note` / `src` | string | — | 详情面板 |
 
 块头里的字符串就是这条边的标签；`label:` 属性会覆盖它。

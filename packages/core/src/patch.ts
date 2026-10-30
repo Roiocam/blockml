@@ -70,20 +70,93 @@ function findBlock(lines: string[], headLine: number): BlockRange {
   return { headIndex, openIndex, closeIndex, indent };
 }
 
+const IDENT_CH = /[A-Za-z0-9_$]/;
+
+/** The `}` matching the `{` at `open`, skipping quoted text; null when the line ends first. */
+function inlineBlockEnd(line: string, open: number): number | null {
+  let depth = 0;
+  let inString = false;
+  for (let i = open; i < line.length; i++) {
+    const ch = line[i]!;
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return null;
+}
+
+/** Replace `key: 12, 34` written inline inside the block's opening line. */
+function replaceInlinePair(line: string, key: string, value: string): string | null {
+  const open = line.indexOf("{");
+  if (open < 0) return null;
+  const end = inlineBlockEnd(line, open) ?? line.length;
+  let inString = false;
+  for (let i = open + 1; i < end; i++) {
+    const ch = line[i]!;
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === "#" || (ch === "/" && line[i + 1] === "/")) break;
+    if (!line.startsWith(key, i)) continue;
+    if (IDENT_CH.test(line[i - 1] ?? "") || IDENT_CH.test(line[i + key.length] ?? "")) continue;
+    let j = i + key.length;
+    while (line[j] === " " || line[j] === "\t") j++;
+    if (line[j] !== ":") continue;
+    j++;
+    const match = /^\s*-?[\d.]+(?:\s*,\s*-?[\d.]+)?/.exec(line.slice(j));
+    if (!match) continue;
+    return line.slice(0, j) + ` ${value}` + line.slice(j + match[0].length);
+  }
+  return null;
+}
+
+/** Add a missing key inside a block that opens and closes on one line. */
+function insertInlinePair(line: string, key: string, value: string): string | null {
+  const open = line.indexOf("{");
+  if (open < 0) return null;
+  const close = inlineBlockEnd(line, open);
+  if (close === null) return null;
+  const head = line.slice(0, close).replace(/\s+$/, "");
+  const tail = line.slice(close);
+  const separator = head.endsWith("{") ? " " : ", ";
+  return `${head}${separator}${key}: ${value} ${tail}`;
+}
+
 function replaceOrInsert(lines: string[], headLine: number, key: string, value: string): void {
   const range = findBlock(lines, headLine);
   const keyRe = new RegExp(`^(\\s*)${key}\\s*:`);
 
-  if (range.closeIndex !== null) {
-    for (let i = range.openIndex! + 1; i < range.closeIndex; i++) {
+  if (range.openIndex !== null) {
+    const inline = replaceInlinePair(lines[range.openIndex] ?? "", key, value);
+    if (inline !== null) {
+      lines[range.openIndex] = inline;
+      return;
+    }
+  }
+
+  if (range.openIndex !== null && range.closeIndex !== null && range.closeIndex > range.openIndex) {
+    for (let i = range.openIndex + 1; i < range.closeIndex; i++) {
       const match = keyRe.exec(lines[i] ?? "");
       if (match) {
         lines[i] = `${match[1]}${key}: ${value}`;
         return;
       }
     }
-    lines.splice(range.openIndex! + 1, 0, `${range.indent}${key}: ${value}`);
+    lines.splice(range.openIndex + 1, 0, `${range.indent}${key}: ${value}`);
     return;
+  }
+
+  // A block written on one line has nowhere to insert a new line, so the key
+  // goes inside the braces: `{ kind: db }` -> `{ kind: db, at: 5, 6 }`.
+  if (range.openIndex !== null && range.closeIndex === range.openIndex) {
+    const inserted = insertInlinePair(lines[range.openIndex] ?? "", key, value);
+    if (inserted !== null) {
+      lines[range.openIndex] = inserted;
+      return;
+    }
   }
 
   // Block-less declaration: expand it so the coordinate has somewhere to live.

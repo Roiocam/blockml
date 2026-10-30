@@ -84,10 +84,11 @@
 .bml-node.bml-dragging{cursor:grabbing}
 .bml-guides{pointer-events:none}
 .bml-guide{stroke:var(--bml-accent);stroke-width:1;fill:none;opacity:.85}
+.bml-marquee{fill:var(--bml-accent);fill-opacity:.07;stroke:var(--bml-accent);stroke-opacity:.7;stroke-width:1;stroke-dasharray:4 3;vector-effect:non-scaling-stroke;pointer-events:none}
 .bml-node-box{fill:var(--bml-panel);stroke:#dbe2ea;stroke-width:1.2;filter:url(#bml-node-shadow)}
 .bml-root[data-bml-theme="dark"] .bml-node-box{stroke:#243146}
 .bml-node:hover .bml-node-box{stroke:#b9c4d2}
-.bml-node.bml-selected .bml-node-box{stroke:var(--bml-accent);stroke-width:2;filter:url(#bml-node-shadow-sel)}
+.bml-node.bml-selected .bml-node-box{stroke:var(--bml-accent);stroke-width:2;fill:color-mix(in srgb,var(--bml-accent) 8%,var(--bml-panel));filter:url(#bml-node-shadow-sel)}
 .bml-node-title{font-weight:600;font-size:13px;line-height:1;font-family:inherit;fill:var(--bml-ink);pointer-events:none}
 .bml-node-tech{font-weight:400;font-size:10.5px;line-height:1;font-family:inherit;fill:#7c8999;pointer-events:none}
 .bml-edge{transition:opacity .12s ease}
@@ -97,6 +98,7 @@
 .bml-focusing .bml-edge.bml-related .bml-edge-label{fill:var(--bml-ink);font-weight:600}
 .bml-node{transition:opacity .12s ease}
 .bml-focusing .bml-node:not(.bml-focus-node){opacity:.55}
+.bml-focusing .bml-node.bml-selected{opacity:1}
 .bml-edge-line{fill:none;stroke-width:1.6;pointer-events:none}
 .bml-edge-hit{fill:none;stroke:transparent;stroke-width:16;cursor:pointer}
 .bml-edge-label{font-weight:500;font-size:10.5px;line-height:1;font-family:inherit;fill:#5c6b7f;pointer-events:none}
@@ -127,6 +129,22 @@
   font:500 10px/1 ui-monospace,monospace;background:var(--bml-bg);border:1px solid var(--bml-line);
   border-bottom-width:2px;border-radius:4px;padding:2px 4px;color:var(--bml-ink-2);
 }
+.bml-align-bar{
+  position:absolute;top:14px;left:50%;transform:translateX(-50%);
+  display:none;align-items:center;gap:2px;padding:5px 7px;z-index:6;
+  background:var(--bml-panel);border:1px solid var(--bml-line);border-radius:10px;
+  box-shadow:0 6px 20px rgba(15,23,42,.1);color:var(--bml-ink-2);
+  font-size:11.5px;white-space:nowrap;
+}
+.bml-align-bar.bml-open{display:flex}
+.bml-align-count{padding:0 6px;font-weight:600;color:var(--bml-ink)}
+.bml-align-sep{width:1px;height:14px;background:var(--bml-line);margin:0 4px}
+.bml-align-bar button{
+  appearance:none;border:none;background:transparent;color:var(--bml-ink-2);
+  font:500 11.5px/1 inherit;padding:5px 7px;border-radius:6px;cursor:pointer;
+}
+.bml-align-bar button:hover{background:var(--bml-bg);color:var(--bml-ink)}
+.bml-align-bar button:disabled{opacity:.35;cursor:default;background:transparent}
 .bml-inspector{
   position:absolute;top:0;right:0;bottom:0;width:340px;display:flex;flex-direction:column;
   background:var(--bml-panel);border-left:1px solid var(--bml-line);
@@ -1087,10 +1105,71 @@ var BlockML = (() => {
     }
     return { headIndex, openIndex, closeIndex, indent };
   }
+  var IDENT_CH = /[A-Za-z0-9_$]/;
+  function inlineBlockEnd(line, open) {
+    let depth = 0;
+    let inString = false;
+    for (let i = open; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) return i;
+      }
+    }
+    return null;
+  }
+  function replaceInlinePair(line, key, value) {
+    const open = line.indexOf("{");
+    if (open < 0) return null;
+    const end = inlineBlockEnd(line, open) ?? line.length;
+    let inString = false;
+    for (let i = open + 1; i < end; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+      if (ch === "#" || ch === "/" && line[i + 1] === "/") break;
+      if (!line.startsWith(key, i)) continue;
+      if (IDENT_CH.test(line[i - 1] ?? "") || IDENT_CH.test(line[i + key.length] ?? "")) continue;
+      let j = i + key.length;
+      while (line[j] === " " || line[j] === "	") j++;
+      if (line[j] !== ":") continue;
+      j++;
+      const match = /^\s*-?[\d.]+(?:\s*,\s*-?[\d.]+)?/.exec(line.slice(j));
+      if (!match) continue;
+      return line.slice(0, j) + ` ${value}` + line.slice(j + match[0].length);
+    }
+    return null;
+  }
+  function insertInlinePair(line, key, value) {
+    const open = line.indexOf("{");
+    if (open < 0) return null;
+    const close = inlineBlockEnd(line, open);
+    if (close === null) return null;
+    const head = line.slice(0, close).replace(/\s+$/, "");
+    const tail = line.slice(close);
+    const separator = head.endsWith("{") ? " " : ", ";
+    return `${head}${separator}${key}: ${value} ${tail}`;
+  }
   function replaceOrInsert(lines, headLine, key, value) {
     const range = findBlock(lines, headLine);
     const keyRe = new RegExp(`^(\\s*)${key}\\s*:`);
-    if (range.closeIndex !== null) {
+    if (range.openIndex !== null) {
+      const inline = replaceInlinePair(lines[range.openIndex] ?? "", key, value);
+      if (inline !== null) {
+        lines[range.openIndex] = inline;
+        return;
+      }
+    }
+    if (range.openIndex !== null && range.closeIndex !== null && range.closeIndex > range.openIndex) {
       for (let i = range.openIndex + 1; i < range.closeIndex; i++) {
         const match = keyRe.exec(lines[i] ?? "");
         if (match) {
@@ -1100,6 +1179,13 @@ var BlockML = (() => {
       }
       lines.splice(range.openIndex + 1, 0, `${range.indent}${key}: ${value}`);
       return;
+    }
+    if (range.openIndex !== null && range.closeIndex === range.openIndex) {
+      const inserted = insertInlinePair(lines[range.openIndex] ?? "", key, value);
+      if (inserted !== null) {
+        lines[range.openIndex] = inserted;
+        return;
+      }
     }
     const head = (lines[range.headIndex] ?? "").replace(/\s+$/, "");
     lines[range.headIndex] = `${head} {`;
@@ -1212,10 +1298,38 @@ var BlockML = (() => {
     const reversed = edge.from > edge.to;
     const spread = count > 1 ? (index - (count - 1) / 2) * PAIR_SPREAD * (reversed ? -1 : 1) : 0;
     const via = edge.via ?? { x: 0, y: 0 };
-    const control = {
+    const base = {
       x: mx + via.x + px * spread,
       y: my + via.y + py * spread
     };
+    const obstacles = (ctx.obstacles ?? []).filter((item) => item.id !== edge.from && item.id !== edge.to).map((item) => item.rect);
+    let control = base;
+    if (obstacles.length) {
+      control = clearCurve(p1, base, p2, obstacles, false);
+      if (!curveClears(p1, control, p2, obstacles)) {
+        const moved = reanchorCurve(fromBox, toBox, p1, p2, via, spread, obstacles);
+        if (moved) {
+          p1 = moved.p1;
+          p2 = moved.p2;
+          control = moved.control;
+        } else {
+          const detour = orthogonalRoute(edge, ctx, 0);
+          if (detour && !routeCrosses(detour.points, obstacles, 2)) {
+            p1 = detour.points[0];
+            p2 = detour.points[detour.points.length - 1];
+            return {
+              p1,
+              p2,
+              control: base,
+              mid: polylineMidpoint(detour.points),
+              offset: spread,
+              detour: detour.points
+            };
+          }
+          control = clearCurve(p1, base, p2, obstacles);
+        }
+      }
+    }
     return {
       p1,
       p2,
@@ -1223,6 +1337,133 @@ var BlockML = (() => {
       mid: bezierAt(p1, control, p2, 0.5),
       offset: spread
     };
+  }
+  var CURVE_SAMPLES = 48;
+  var CURVE_SAMPLES_MAX = 160;
+  var CURVE_PAD = 3;
+  function curveSampleCount(p1, p2) {
+    const span = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    return Math.max(CURVE_SAMPLES, Math.min(CURVE_SAMPLES_MAX, Math.ceil(span / 4)));
+  }
+  function curveCrossings(p1, control, p2, obstacles) {
+    let hits = 0;
+    const samples = curveSampleCount(p1, p2);
+    for (let i = 1; i < samples; i++) {
+      const point = bezierAt(p1, control, p2, i / samples);
+      for (const rect of obstacles) {
+        if (point.x > rect.x - CURVE_PAD && point.x < rect.x + rect.w + CURVE_PAD && point.y > rect.y - CURVE_PAD && point.y < rect.y + rect.h + CURVE_PAD) {
+          hits++;
+          break;
+        }
+      }
+    }
+    return hits;
+  }
+  function clearCurve(p1, base, p2, obstacles, ring = true) {
+    let best = base;
+    let bestHits = curveCrossings(p1, base, p2, obstacles);
+    if (bestHits === 0) return base;
+    const vx = p2.x - p1.x;
+    const vy = p2.y - p1.y;
+    const len = Math.hypot(vx, vy) || 1;
+    const nx = -vy / len;
+    const ny = vx / len;
+    const ux = vx / len;
+    const uy = vy / len;
+    const candidates = [];
+    for (const along of [0, 70, -70, 140, -140]) {
+      for (const perp of [0, 40, -40, 80, -80, 120, -120, 160, -160, 200, -200, 260, -260, 320, -320]) {
+        if (!along && !perp) continue;
+        const point = {
+          x: base.x + nx * perp + ux * along,
+          y: base.y + ny * perp + uy * along
+        };
+        candidates.push({ point, distance: Math.hypot(perp, along) });
+      }
+    }
+    candidates.sort((a, b) => a.distance - b.distance);
+    for (const candidate of candidates) {
+      const hits = curveCrossings(p1, candidate.point, p2, obstacles);
+      if (hits === 0) return candidate.point;
+      if (hits < bestHits) {
+        best = candidate.point;
+        bestHits = hits;
+      }
+    }
+    if (ring) {
+      for (const radius of [400, 480, 560, 640, 720, 800]) {
+        for (const angle of [0, 45, -45, 90, -90, 135, -135, 180]) {
+          const rad = angle * Math.PI / 180;
+          const perp = radius * Math.cos(rad);
+          const along = radius * Math.sin(rad);
+          const point = {
+            x: base.x + nx * perp + ux * along,
+            y: base.y + ny * perp + uy * along
+          };
+          if (curveCrossings(p1, point, p2, obstacles) === 0) return point;
+        }
+      }
+    }
+    return best;
+  }
+  function curveClears(p1, control, p2, obstacles) {
+    return curveCrossings(p1, control, p2, obstacles) === 0;
+  }
+  function curveLength(p1, control, p2) {
+    let total = 0;
+    let prev = p1;
+    for (let i = 1; i <= 24; i++) {
+      const point = bezierAt(p1, control, p2, i / 24);
+      total += Math.hypot(point.x - prev.x, point.y - prev.y);
+      prev = point;
+    }
+    return total;
+  }
+  function leavesAnchor(control, anchor, side) {
+    const out = SIDE_OUT[side];
+    return (control.x - anchor.x) * out.x + (control.y - anchor.y) * out.y > 0;
+  }
+  function reanchorCurve(fromBox, toBox, p1, p2, via, spread, obstacles) {
+    const fromSide = edgeSide(p1, fromBox);
+    const toSide = edgeSide(p2, toBox);
+    const alternatives = (box, side, anchor) => SIDES.filter((item) => item !== side).map((item) => ({ side: item, point: sideMidpoint(box, item) })).sort(
+      (a, b) => Math.hypot(a.point.x - anchor.x, a.point.y - anchor.y) - Math.hypot(b.point.x - anchor.x, b.point.y - anchor.y)
+    ).slice(0, 2);
+    const fromOptions = alternatives(fromBox, fromSide, p1);
+    const toOptions = alternatives(toBox, toSide, p2);
+    const attempts = [];
+    for (const option of fromOptions) {
+      attempts.push({ p1: option.point, p2, fromSide: option.side, toSide, changed: 1 });
+    }
+    for (const option of toOptions) {
+      attempts.push({ p1, p2: option.point, fromSide, toSide: option.side, changed: 1 });
+    }
+    for (const from of fromOptions) {
+      for (const to of toOptions) {
+        attempts.push({ p1: from.point, p2: to.point, fromSide: from.side, toSide: to.side, changed: 2 });
+      }
+    }
+    let best = null;
+    for (const attempt of attempts) {
+      const mx = (attempt.p1.x + attempt.p2.x) / 2;
+      const my = (attempt.p1.y + attempt.p2.y) / 2;
+      const vx = attempt.p2.x - attempt.p1.x;
+      const vy = attempt.p2.y - attempt.p1.y;
+      const len = Math.hypot(vx, vy) || 1;
+      const base = {
+        x: mx + via.x + -vy / len * spread,
+        y: my + via.y + vx / len * spread
+      };
+      const control = clearCurve(attempt.p1, base, attempt.p2, obstacles, false);
+      if (!curveClears(attempt.p1, control, attempt.p2, obstacles)) continue;
+      if (!leavesAnchor(control, attempt.p1, attempt.fromSide)) continue;
+      if (!leavesAnchor(control, attempt.p2, attempt.toSide)) continue;
+      const score = curveLength(attempt.p1, control, attempt.p2) + attempt.changed * 80;
+      if (!best || score < best.score) {
+        best = { p1: attempt.p1, p2: attempt.p2, control, score };
+      }
+    }
+    return best ? { p1: best.p1, p2: best.p2, control: best.control } : null;
   }
   function groupBoundingBox(nodes, options = DEFAULT_BOX) {
     if (!nodes.length) return null;
@@ -1449,6 +1690,40 @@ var BlockML = (() => {
     }
     return { dx: dx + (snapX?.delta ?? 0), dy: dy + (snapY?.delta ?? 0), guides };
   }
+  function axisCenter(rect, axis) {
+    return axis === "x" ? rect.x + rect.w / 2 : rect.y + rect.h / 2;
+  }
+  function alignBoxes(items, axis) {
+    const result = /* @__PURE__ */ new Map();
+    if (items.length < 2) return result;
+    const bounds = unionOf(items.map((item) => item.rect));
+    if (!bounds) return result;
+    const center = axisCenter(bounds, axis);
+    for (const { id, rect } of items) {
+      result.set(id, {
+        x: axis === "x" ? Math.round(center - rect.w / 2) : rect.x,
+        y: axis === "y" ? Math.round(center - rect.h / 2) : rect.y
+      });
+    }
+    return result;
+  }
+  function distributeBoxes(items, axis) {
+    const result = /* @__PURE__ */ new Map();
+    if (items.length < 3) return result;
+    const ordered = [...items].sort((a, b) => axisCenter(a.rect, axis) - axisCenter(b.rect, axis));
+    const first = axisCenter(ordered[0].rect, axis);
+    const last = axisCenter(ordered[ordered.length - 1].rect, axis);
+    const step = (last - first) / (ordered.length - 1);
+    ordered.forEach((item, index) => {
+      if (index === 0 || index === ordered.length - 1) return;
+      const center = first + step * index;
+      result.set(item.id, {
+        x: axis === "x" ? Math.round(center - item.rect.w / 2) : item.rect.x,
+        y: axis === "y" ? Math.round(center - item.rect.h / 2) : item.rect.y
+      });
+    });
+    return result;
+  }
   function primarySide(box, other) {
     const dx = other.cx - box.cx;
     const dy = other.cy - box.cy;
@@ -1461,6 +1736,35 @@ var BlockML = (() => {
     const y0 = Math.min(a.y, b.y);
     const y1 = Math.max(a.y, b.y);
     return x1 > rect.x - pad && x0 < rect.x + rect.w + pad && y1 > rect.y - pad && y0 < rect.y + rect.h + pad;
+  }
+  function routeCrosses(points, obstacles, pad = 0) {
+    for (let i = 1; i < points.length; i++) {
+      for (const rect of obstacles) {
+        if (segmentHitsRect(points[i - 1], points[i], rect, pad)) return true;
+      }
+    }
+    return false;
+  }
+  function polylineMidpoint(points) {
+    if (!points.length) return { x: 0, y: 0 };
+    if (points.length === 1) return points[0];
+    let total = 0;
+    for (let i = 1; i < points.length; i++) {
+      total += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+    }
+    let walked = 0;
+    const half = total / 2;
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1];
+      const b = points[i];
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (walked + len >= half) {
+        const k = len < 1e-6 ? 0 : (half - walked) / len;
+        return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
+      }
+      walked += len;
+    }
+    return points[points.length - 1];
   }
   function routeScore(points, obstacles, soft) {
     let score = 0;
@@ -1478,7 +1782,16 @@ var BlockML = (() => {
     }
     return score + length * 0.05 + Math.max(0, points.length - 3) * 8;
   }
-  function routeBetween(p1, side1, p2, side2, lane, trunk) {
+  function segmentCrossings(points, obstacles) {
+    let hits = 0;
+    for (let i = 1; i < points.length; i++) {
+      for (const rect of obstacles) {
+        if (segmentHitsRect(points[i - 1], points[i], rect, 6)) hits++;
+      }
+    }
+    return hits;
+  }
+  function routeBetween(p1, side1, p2, side2, lane, trunk, obstacles = []) {
     const o1 = SIDE_OUT[side1];
     const o2 = SIDE_OUT[side2];
     const stub = Math.max(14, ROUTE_STUB + lane * 10);
@@ -1563,7 +1876,14 @@ var BlockML = (() => {
           };
         }
         const corner = { x: a2.x, y: a1.y };
-        return { points: cleanPoints([p1, a1, corner, a2, p2]), junction: corner };
+        const direct = cleanPoints([p1, a1, corner, a2, p2]);
+        const bendX = a1.x + o1.x * 26;
+        const bendY = a2.y + o2.y * 26;
+        const bent = cleanPoints([p1, a1, { x: bendX, y: a1.y }, { x: bendX, y: bendY }, { x: a2.x, y: bendY }, a2, p2]);
+        if (segmentCrossings(direct, obstacles) > segmentCrossings(bent, obstacles)) {
+          return { points: bent, junction: { x: bendX, y: bendY } };
+        }
+        return { points: direct, junction: corner };
       }
       const x2 = a1.x + o1.x * 26;
       const y2 = a2.y + o2.y * 26;
@@ -1582,7 +1902,14 @@ var BlockML = (() => {
         };
       }
       const corner = { x: a1.x, y: a2.y };
-      return { points: cleanPoints([p1, a1, corner, a2, p2]), junction: corner };
+      const direct = cleanPoints([p1, a1, corner, a2, p2]);
+      const bendY = a1.y + o1.y * 26;
+      const bendX = a2.x + o2.x * 26;
+      const bent = cleanPoints([p1, a1, { x: a1.x, y: bendY }, { x: bendX, y: bendY }, { x: bendX, y: a2.y }, a2, p2]);
+      if (segmentCrossings(direct, obstacles) > segmentCrossings(bent, obstacles)) {
+        return { points: bent, junction: { x: bendX, y: bendY } };
+      }
+      return { points: direct, junction: corner };
     }
     const y = a1.y + o1.y * 26;
     const x = a2.x + o2.x * 26;
@@ -1616,7 +1943,8 @@ var BlockML = (() => {
           forcedTo ? forcedTo.point : sideMidpoint(toBox, side2),
           side2,
           lane,
-          trunk
+          trunk,
+          obstacles
         );
         let score = routeScore(route.points, obstacles, soft);
         if (side1 !== natural1) score += 8;
@@ -1940,10 +2268,11 @@ var BlockML = (() => {
 .bml-node.bml-dragging{cursor:grabbing}
 .bml-guides{pointer-events:none}
 .bml-guide{stroke:var(--bml-accent);stroke-width:1;fill:none;opacity:.85}
+.bml-marquee{fill:var(--bml-accent);fill-opacity:.07;stroke:var(--bml-accent);stroke-opacity:.7;stroke-width:1;stroke-dasharray:4 3;vector-effect:non-scaling-stroke;pointer-events:none}
 .bml-node-box{fill:var(--bml-panel);stroke:#dbe2ea;stroke-width:1.2;filter:url(#bml-node-shadow)}
 .bml-root[data-bml-theme="dark"] .bml-node-box{stroke:#243146}
 .bml-node:hover .bml-node-box{stroke:#b9c4d2}
-.bml-node.bml-selected .bml-node-box{stroke:var(--bml-accent);stroke-width:2;filter:url(#bml-node-shadow-sel)}
+.bml-node.bml-selected .bml-node-box{stroke:var(--bml-accent);stroke-width:2;fill:color-mix(in srgb,var(--bml-accent) 8%,var(--bml-panel));filter:url(#bml-node-shadow-sel)}
 .bml-node-title{font-weight:600;font-size:13px;line-height:1;font-family:inherit;fill:var(--bml-ink);pointer-events:none}
 .bml-node-tech{font-weight:400;font-size:10.5px;line-height:1;font-family:inherit;fill:#7c8999;pointer-events:none}
 .bml-edge{transition:opacity .12s ease}
@@ -1953,6 +2282,7 @@ var BlockML = (() => {
 .bml-focusing .bml-edge.bml-related .bml-edge-label{fill:var(--bml-ink);font-weight:600}
 .bml-node{transition:opacity .12s ease}
 .bml-focusing .bml-node:not(.bml-focus-node){opacity:.55}
+.bml-focusing .bml-node.bml-selected{opacity:1}
 .bml-edge-line{fill:none;stroke-width:1.6;pointer-events:none}
 .bml-edge-hit{fill:none;stroke:transparent;stroke-width:16;cursor:pointer}
 .bml-edge-label{font-weight:500;font-size:10.5px;line-height:1;font-family:inherit;fill:#5c6b7f;pointer-events:none}
@@ -1983,6 +2313,22 @@ var BlockML = (() => {
   font:500 10px/1 ui-monospace,monospace;background:var(--bml-bg);border:1px solid var(--bml-line);
   border-bottom-width:2px;border-radius:4px;padding:2px 4px;color:var(--bml-ink-2);
 }
+.bml-align-bar{
+  position:absolute;top:14px;left:50%;transform:translateX(-50%);
+  display:none;align-items:center;gap:2px;padding:5px 7px;z-index:6;
+  background:var(--bml-panel);border:1px solid var(--bml-line);border-radius:10px;
+  box-shadow:0 6px 20px rgba(15,23,42,.1);color:var(--bml-ink-2);
+  font-size:11.5px;white-space:nowrap;
+}
+.bml-align-bar.bml-open{display:flex}
+.bml-align-count{padding:0 6px;font-weight:600;color:var(--bml-ink)}
+.bml-align-sep{width:1px;height:14px;background:var(--bml-line);margin:0 4px}
+.bml-align-bar button{
+  appearance:none;border:none;background:transparent;color:var(--bml-ink-2);
+  font:500 11.5px/1 inherit;padding:5px 7px;border-radius:6px;cursor:pointer;
+}
+.bml-align-bar button:hover{background:var(--bml-bg);color:var(--bml-ink)}
+.bml-align-bar button:disabled{opacity:.35;cursor:default;background:transparent}
 .bml-inspector{
   position:absolute;top:0;right:0;bottom:0;width:340px;display:flex;flex-direction:column;
   background:var(--bml-panel);border-left:1px solid var(--bml-line);
@@ -2055,6 +2401,7 @@ var BlockML = (() => {
   // packages/viewer/src/viewer.ts
   var SVGNS = "http://www.w3.org/2000/svg";
   var ORTHO_LANES = [0, 1, -1, 2, -2, 3, -3, 4, -4];
+  var BUNDLE_SIDES = ["top", "right", "bottom", "left"];
   var SNAP_RADIUS = 6;
   var stylesInjected = false;
   function injectStyles() {
@@ -2120,6 +2467,7 @@ var BlockML = (() => {
     legend;
     inspector;
     layersPanel;
+    alignBar;
     errorBox;
     options;
     source;
@@ -2196,6 +2544,17 @@ var BlockML = (() => {
       this.layersPanel.className = "bml-layers";
       this.root.appendChild(this.layersPanel);
       this.bindLayersPanel();
+      this.alignBar = document.createElement("div");
+      this.alignBar.className = "bml-align-bar";
+      this.alignBar.setAttribute("role", "toolbar");
+      this.alignBar.setAttribute("aria-label", "\u591A\u9009\u5BF9\u9F50");
+      this.alignBar.innerHTML = `<span class="bml-align-count" title="Shift / Ctrl \u70B9\u9009\u6216 Shift+\u62D6\u62FD\u6846\u9009\uFF1BCmd/Ctrl+A \u5168\u9009"></span><span class="bml-align-sep"></span><button type="button" data-bml-align="align-x" title="\u6309\u4E2D\u7EBF\u5BF9\u6210\u4E00\u5217">\u7EB5\u5411\u5BF9\u9F50</button><button type="button" data-bml-align="align-y" title="\u6309\u4E2D\u7EBF\u5BF9\u6210\u4E00\u884C">\u6A2A\u5411\u5BF9\u9F50</button><button type="button" data-bml-align="dist-x" title="\u9996\u5C3E\u4E0D\u52A8\uFF0C\u6C34\u5E73\u95F4\u8DDD\u76F8\u7B49">\u6C34\u5E73\u7B49\u8DDD</button><button type="button" data-bml-align="dist-y" title="\u9996\u5C3E\u4E0D\u52A8\uFF0C\u5782\u76F4\u95F4\u8DDD\u76F8\u7B49">\u5782\u76F4\u7B49\u8DDD</button>`;
+      this.alignBar.addEventListener("click", (event) => {
+        const button = event.target?.closest("button[data-bml-align]");
+        if (!button || button.disabled) return;
+        this.applyAlign(button.dataset.bmlAlign);
+      });
+      this.root.appendChild(this.alignBar);
       this.buildDefs();
       this.bindCanvas();
     }
@@ -2485,12 +2844,13 @@ var BlockML = (() => {
         this.groupEls.set(group.id, { rect, text, toggle, sign });
       }
     }
-    edgeGeometryOf(edge) {
+    edgeGeometryOf(edge, obstacles) {
       if (!this.viewDoc) return null;
       return edgeGeometry(edge, {
         byId: this.nodeMap(),
         pairs: indexPairs(this.viewDoc),
-        fans: this.fans
+        fans: this.fans,
+        obstacles
       });
     }
     nodeMap() {
@@ -2550,7 +2910,7 @@ var BlockML = (() => {
      * trunk, so a node reaching several peers draws one line that branches out
      * instead of a stack of near-parallel ones.
      */
-    computeBundles() {
+    computeBundles(obstacles = []) {
       this.bundleOf = /* @__PURE__ */ new Map();
       this.bundleGroups = [];
       this.bundleInfo = /* @__PURE__ */ new Map();
@@ -2587,12 +2947,50 @@ var BlockML = (() => {
           x: peers.reduce((sum, item) => sum + item.box.cx, 0) / peers.length,
           y: peers.reduce((sum, item) => sum + item.box.cy, 0) / peers.length
         };
-        const side = edgeSide(anchorPoint(sharedNode, centroid), sharedBox);
+        let side = edgeSide(anchorPoint(sharedNode, centroid), sharedBox);
+        if (obstacles.length) {
+          const probe = (candidate) => {
+            const port = sideMidpoint(sharedBox, candidate);
+            const anchors = /* @__PURE__ */ new Map();
+            for (const item of peers) {
+              const anchor = { point: port, side: candidate };
+              anchors.set(item.edge.id, end === "from" ? { from: anchor } : { to: anchor });
+            }
+            const context = { byId: nodes, pairs: /* @__PURE__ */ new Map(), obstacles, anchors };
+            let score = 0;
+            for (const item of peers) {
+              const route = orthogonalRoute(item.edge, context, 0);
+              if (!route) return Number.POSITIVE_INFINITY;
+              const blockers = obstacles.filter((entry) => entry.id !== item.edge.from && entry.id !== item.edge.to).map((entry) => entry.rect);
+              if (routeCrosses(route.points, blockers, 2)) score += 1e3;
+              for (let i = 1; i < route.points.length; i++) {
+                const a = route.points[i - 1];
+                const b = route.points[i];
+                score += Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
+              }
+              score += route.points.length * 6;
+            }
+            return score;
+          };
+          let bestScore = probe(side);
+          for (const candidate of BUNDLE_SIDES) {
+            if (candidate === side) continue;
+            const score = probe(candidate);
+            if (score < bestScore - 1) {
+              bestScore = score;
+              side = candidate;
+            }
+          }
+        }
         const point = sideMidpoint(sharedBox, side);
         const horizontal = side === "left" || side === "right";
         const others = peers.map((item) => {
           const peerPoint = anchorPoint(item.node, { x: sharedBox.cx, y: sharedBox.cy });
-          return { side: edgeSide(peerPoint, item.box), at: horizontal ? peerPoint.x : peerPoint.y };
+          return {
+            side: edgeSide(peerPoint, item.box),
+            point: peerPoint,
+            at: horizontal ? peerPoint.x : peerPoint.y
+          };
         });
         let trunk;
         const sameAxis = others.every((peer) => (peer.side === "left" || peer.side === "right") === horizontal);
@@ -2608,6 +3006,25 @@ var BlockML = (() => {
           const at = Math.round(clamp(middle, low, high));
           const valid = outward > 0 ? at >= nearNode && at <= nearPeers : at <= nearNode && at >= nearPeers;
           if (valid) trunk = horizontal ? { x: at } : { y: at };
+        }
+        if (trunk && obstacles.length) {
+          const skip = /* @__PURE__ */ new Set([sharedNode.id, ...peers.map((item) => item.node.id)]);
+          const rects = obstacles.filter((item) => !skip.has(item.id)).map((item) => item.rect);
+          const segments = [];
+          if (horizontal) {
+            const borderX = side === "left" ? sharedBox.x : sharedBox.x + sharedBox.w;
+            segments.push([{ x: borderX, y: point.y }, { x: trunk.x, y: point.y }]);
+            for (const peer of others) {
+              segments.push([{ x: trunk.x, y: point.y }, { x: trunk.x, y: peer.point.y }]);
+            }
+          } else {
+            const borderY = side === "top" ? sharedBox.y : sharedBox.y + sharedBox.h;
+            segments.push([{ x: point.x, y: borderY }, { x: point.x, y: trunk.y }]);
+            for (const peer of others) {
+              segments.push([{ x: point.x, y: trunk.y }, { x: peer.point.x, y: trunk.y }]);
+            }
+          }
+          if (segments.some((segment) => routeCrosses(segment, rects, 24))) trunk = void 0;
         }
         this.bundleGroups.push({
           name,
@@ -2717,7 +3134,7 @@ var BlockML = (() => {
     /**
      * Greedy lane assignment plus overlap repair for one candidate set.
      */
-    selectRoutes(edges, candidates, byId, paint = false) {
+    selectRoutes(edges, candidates, byId, paint = false, obstacles = []) {
       const routes = /* @__PURE__ */ new Map();
       const lanes = /* @__PURE__ */ new Map();
       const routeOf = (edge) => candidates.get(edge.id)?.get(lanes.get(edge.id) ?? 0);
@@ -2732,10 +3149,21 @@ var BlockML = (() => {
         ])
       );
       const weightOf = (a, b) => colorOf.get(a) === colorOf.get(b) ? 0.25 : 1;
+      const laneOptions = /* @__PURE__ */ new Map();
+      for (const edge of edges) {
+        const all = [...candidates.get(edge.id)?.keys() ?? []];
+        const blockers = obstacles.filter((item) => item.id !== edge.from && item.id !== edge.to).map((item) => item.rect);
+        const clean = all.filter((lane) => {
+          const route = candidates.get(edge.id)?.get(lane);
+          return !!route && !routeCrosses(route.points, blockers, 2);
+        });
+        laneOptions.set(edge.id, clean.length ? clean : all);
+      }
       const accepted = [];
       for (const edge of edges) {
-        let chosen = 0;
-        for (const lane of this.bundleOf.has(edge.id) ? [0] : ORTHO_LANES) {
+        const options = laneOptions.get(edge.id) ?? [];
+        let chosen = options[0] ?? 0;
+        for (const lane of options) {
           const route2 = candidates.get(edge.id)?.get(lane);
           if (!route2) continue;
           const clash = accepted.some((item) => {
@@ -2771,7 +3199,7 @@ var BlockML = (() => {
         let improved = false;
         for (const edge of edges) {
           const previous = lanes.get(edge.id) ?? 0;
-          for (const lane of ORTHO_LANES) {
+          for (const lane of laneOptions.get(edge.id) ?? []) {
             if (lane === previous || !candidates.get(edge.id)?.has(lane)) continue;
             lanes.set(edge.id, lane);
             const trialScore = totalOverlap();
@@ -2799,7 +3227,7 @@ var BlockML = (() => {
      */
     buildOrthogonalRoutes(nodeObstacles, soft) {
       if (!this.viewDoc) return /* @__PURE__ */ new Map();
-      this.computeBundles();
+      this.computeBundles(nodeObstacles);
       const edges = this.viewDoc.edges;
       const ctx = {
         byId: this.nodeMap(),
@@ -2823,9 +3251,9 @@ var BlockML = (() => {
         }
         return candidates;
       };
-      const baseline = this.selectRoutes(edges, buildCandidates(), ctx.byId);
+      const baseline = this.selectRoutes(edges, buildCandidates(), ctx.byId, false, nodeObstacles);
       this.computePorts(baseline);
-      return this.selectRoutes(edges, buildCandidates(), ctx.byId, true);
+      return this.selectRoutes(edges, buildCandidates(), ctx.byId, true, nodeObstacles);
     }
     collectObstacles() {
       const family = getComputedStyle(this.root).fontFamily;
@@ -2938,7 +3366,7 @@ var BlockML = (() => {
         for (const [id, route] of routes) routePaths.set(id, pathMetrics(route.points));
       } else {
         for (const edge of this.viewDoc.edges) {
-          const geo = this.edgeGeometryOf(edge);
+          const geo = this.edgeGeometryOf(edge, routeObstacles);
           if (geo) geos.set(edge.id, geo);
         }
       }
@@ -2952,7 +3380,8 @@ var BlockML = (() => {
         if (orthogonal ? !path : !geo) continue;
         const style = edgeKindStyle(edge.kind);
         const dash = edge.dash === null ? style.dash ?? "" : edge.dash ? "6 4" : "";
-        const d = orthogonal ? polylinePath(path.points, orthHops?.get(edge.id)) : edgePath(geo, hops.get(edge.id));
+        const detour = geo?.detour;
+        const d = orthogonal ? polylinePath(path.points, orthHops?.get(edge.id)) : detour ? polylinePath(detour) : edgePath(geo, hops.get(edge.id));
         const start = orthogonal ? path.points[0] : geo.p1;
         const end = orthogonal ? path.points[path.points.length - 1] : geo.p2;
         const paint = this.edgePaint(edge, start, end, nodes, paintIndex++);
@@ -2972,7 +3401,16 @@ var BlockML = (() => {
         const font = `500 10.5px ${getComputedStyle(this.root).fontFamily}`;
         const shown = truncate(labelText, font, 260);
         const width = shown ? textWidth(shown, font) : 0;
-        const placed = path ? placeLabelOnPath(path, width, 17, obstacles, this.placedLabels, this.bundleLabelRange(path, edge.id), foreign.get(edge.id)) : placeLabel(geo, width, 17, obstacles, this.placedLabels);
+        const labelPath = path ?? (detour ? pathMetrics(detour) : void 0);
+        const placed = labelPath ? placeLabelOnPath(
+          labelPath,
+          width,
+          17,
+          obstacles,
+          this.placedLabels,
+          path ? this.bundleLabelRange(path, edge.id) : void 0,
+          foreign.get(edge.id)
+        ) : placeLabel(geo, width, 17, obstacles, this.placedLabels);
         this.placedLabels.push(placed.rect);
         edge.__labelT = placed.t;
         edge.__labelOff = placed.offset;
@@ -3112,6 +3550,12 @@ var BlockML = (() => {
         if (event.button !== 0) return;
         const target = event.target;
         if (target.closest(".bml-node") || target.closest(".bml-edge")) return;
+        if (event.shiftKey && this.viewDoc && !this.options.readOnly) {
+          event.preventDefault();
+          this.selectEdge(null);
+          this.startMarquee(event);
+          return;
+        }
         this.selectNode(null);
         this.selectEdge(null);
         pan = { sx: event.clientX, sy: event.clientY, vx: this.view.x, vy: this.view.y };
@@ -3142,6 +3586,52 @@ var BlockML = (() => {
       }, { passive: false });
       window.addEventListener("keydown", this.onKeyDown);
     }
+    /**
+     * A Shift+drag rectangle on empty canvas. It is additive to the current
+     * selection, and every node it touches lights up live while dragging.
+     */
+    startMarquee(event) {
+      const rect = this.svg.getBoundingClientRect();
+      const origin = { x: event.clientX, y: event.clientY };
+      const base = new Set(this.selectedNodes);
+      let shape = null;
+      let moved = false;
+      const onMove = (move) => {
+        if (!moved && Math.abs(move.clientX - origin.x) < 3 && Math.abs(move.clientY - origin.y) < 3) return;
+        moved = true;
+        const left = Math.min(origin.x, move.clientX) - rect.left;
+        const top = Math.min(origin.y, move.clientY) - rect.top;
+        const width = Math.abs(move.clientX - origin.x);
+        const height = Math.abs(move.clientY - origin.y);
+        if (!shape) shape = el("rect", { class: "bml-marquee", rx: 3 }, this.svg);
+        shape.setAttribute("x", String(left));
+        shape.setAttribute("y", String(top));
+        shape.setAttribute("width", String(width));
+        shape.setAttribute("height", String(height));
+        const a = this.toWorld(origin.x, origin.y);
+        const b = this.toWorld(move.clientX, move.clientY);
+        const bounds = {
+          x: Math.min(a.x, b.x),
+          y: Math.min(a.y, b.y),
+          w: Math.abs(b.x - a.x),
+          h: Math.abs(b.y - a.y)
+        };
+        const hits = (this.viewDoc?.nodes ?? []).filter((node) => node.at).filter((node) => {
+          const box = boxOf(node);
+          return box.x < bounds.x + bounds.w && box.x + box.w > bounds.x && box.y < bounds.y + bounds.h && box.y + box.h > bounds.y;
+        }).map((node) => node.id);
+        this.previewSelection(/* @__PURE__ */ new Set([...base, ...hits]));
+      };
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        shape?.remove();
+        if (!moved) return;
+        this.finishMarquee();
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    }
     onKeyDown = (event) => {
       if (event.key === "Escape") {
         if (this.layersOpen) this.toggleLayers(false);
@@ -3151,6 +3641,18 @@ var BlockML = (() => {
       if ((event.metaKey || event.ctrlKey) && event.key === "0") {
         event.preventDefault();
         this.fit();
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
+        const target = event.target;
+        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+        const ids = this.viewDoc?.nodes.map((node) => node.id) ?? [];
+        if (!ids.length) return;
+        event.preventDefault();
+        this.selectedNodes = new Set(ids);
+        this.selectedNode = null;
+        this.selectedEdge = null;
+        this.applySelection();
+        this.closeInspector();
       }
     };
     startNodeDrag(event, node) {
@@ -3288,9 +3790,10 @@ var BlockML = (() => {
         }
         return;
       }
+      const routeObstacles = this.collectObstacles().routes;
       const geos = /* @__PURE__ */ new Map();
       for (const edge of this.viewDoc.edges) {
-        const geo = this.edgeGeometryOf(edge);
+        const geo = this.edgeGeometryOf(edge, routeObstacles);
         if (geo) geos.set(edge.id, geo);
       }
       const hops = computeHops(this.viewDoc.edges, geos);
@@ -3301,6 +3804,7 @@ var BlockML = (() => {
         const d = edgePath(geo, hops.get(edge.id));
         els.line.setAttribute("d", d);
         els.hit.setAttribute("d", d);
+        if (geo.detour) this.placeEdgeLabel(edge, pathMetrics(geo.detour));
       }
     }
     placeEdgeLabel(edge, path) {
@@ -3327,11 +3831,15 @@ var BlockML = (() => {
     }
     refreshEdge(edge) {
       const els = this.edgeEls.get(edge.id);
-      const geo = this.edgeGeometryOf(edge);
+      const geo = this.edgeGeometryOf(edge, this.collectObstacles().routes);
       if (!els || !geo) return;
-      const d = pathOf(geo);
+      const d = edgePath(geo);
       els.line.setAttribute("d", d);
       els.hit.setAttribute("d", d);
+      if (geo.detour) {
+        this.placeEdgeLabel(edge, pathMetrics(geo.detour));
+        return;
+      }
       const family = getComputedStyle(this.root).fontFamily;
       const font = `500 10.5px ${family}`;
       const text = truncate(edge.label ?? edge.title ?? "", font, 260);
@@ -3441,10 +3949,59 @@ var BlockML = (() => {
       }
       this.applyFocus();
       this.refreshBendHandle();
+      this.updateAlignBar();
+    }
+    /** Visible nodes in the current selection; hidden ones cannot be aligned. */
+    selectedVisibleNodes() {
+      return this.viewDoc?.nodes.filter((node) => node.at && this.selectedNodes.has(node.id)) ?? [];
+    }
+    updateAlignBar() {
+      const selected = this.selectedVisibleNodes();
+      const open = !this.options.readOnly && selected.length >= 2;
+      this.alignBar.classList.toggle("bml-open", open);
+      if (!open) return;
+      const count = this.alignBar.querySelector(".bml-align-count");
+      if (count) count.textContent = `${selected.length} \u4E2A\u8282\u70B9`;
+      for (const button of this.alignBar.querySelectorAll("button[data-bml-align]")) {
+        const distribute = button.dataset.bmlAlign?.startsWith("dist") ?? false;
+        button.disabled = distribute && selected.length < 3;
+      }
+    }
+    applyAlign(action) {
+      if (this.options.readOnly) return;
+      const nodes = this.selectedVisibleNodes();
+      if (nodes.length < 2) return;
+      const items = nodes.map((node) => ({ id: node.id, rect: boxOf(node) }));
+      let next;
+      if (action === "align-x") next = alignBoxes(items, "x");
+      else if (action === "align-y") next = alignBoxes(items, "y");
+      else if (action === "dist-x" && items.length >= 3) next = distributeBoxes(items, "x");
+      else if (action === "dist-y" && items.length >= 3) next = distributeBoxes(items, "y");
+      else return;
+      if (next.size) this.commit({ nodes: next });
+    }
+    /** Live selection while a marquee is dragged; no inspector changes per move. */
+    previewSelection(ids) {
+      this.selectedNodes = new Set(ids);
+      this.selectedEdge = null;
+      this.selectedNode = ids.size === 1 ? [...ids][0] : null;
+      this.applySelection();
+    }
+    finishMarquee() {
+      const ids = this.selectedNodes;
+      if (ids.size === 1) {
+        this.selectedNode = [...ids][0];
+        this.applySelection();
+        this.openNodeInspector(this.selectedNode);
+        return;
+      }
+      this.selectedNode = null;
+      this.applySelection();
+      this.closeInspector();
     }
     /** Dim everything that is not on the hovered/selected node. */
     applyFocus() {
-      const focus = this.selectedNode ?? this.hoveredNode;
+      const focus = this.selectedNodes.size > 1 ? null : this.selectedNode ?? this.hoveredNode;
       const edges = this.viewDoc ? relatedEdges(this.viewDoc, focus) : /* @__PURE__ */ new Set();
       const nodes = this.viewDoc ? relatedNodes(this.viewDoc, focus) : /* @__PURE__ */ new Set();
       this.root.classList.toggle("bml-focusing", Boolean(focus));
@@ -3462,8 +4019,8 @@ var BlockML = (() => {
       if (this.routeStyle === "orthogonal" || !this.selectedEdge || !this.doc) return;
       const edge = this.doc.edges.find((e) => e.id === this.selectedEdge);
       if (!edge) return;
-      const geo = this.edgeGeometryOf(edge);
-      if (!geo) return;
+      const geo = this.edgeGeometryOf(edge, this.collectObstacles().routes);
+      if (!geo || geo.detour) return;
       el("path", {
         d: `M ${geo.mid.x} ${geo.mid.y} L ${geo.control.x} ${geo.control.y}`,
         class: "bml-bend-line"
@@ -3731,6 +4288,7 @@ var BlockML = (() => {
     setReadOnly(readOnly) {
       this.options.readOnly = readOnly;
       this.root.classList.toggle("bml-readonly", readOnly);
+      this.updateAlignBar();
     }
     toSVG() {
       const clone = this.svg.cloneNode(true);
@@ -3738,7 +4296,7 @@ var BlockML = (() => {
       clone.querySelector(".bml-overlay")?.remove();
       clone.querySelector(".bml-ui")?.remove();
       clone.querySelector(".bml-groups > rect[fill^='url']")?.remove();
-      clone.querySelectorAll(".bml-group-toggle, .bml-bend-handle, .bml-bend-line, .bml-edge-hit").forEach((el2) => el2.remove());
+      clone.querySelectorAll(".bml-group-toggle, .bml-bend-handle, .bml-bend-line, .bml-edge-hit, .bml-guides, .bml-marquee").forEach((el2) => el2.remove());
       clone.querySelectorAll(".bml-selected, .bml-dragging, .bml-related, .bml-focus-node").forEach((el2) => {
         el2.classList.remove("bml-selected", "bml-dragging", "bml-related", "bml-focus-node");
       });
@@ -3898,7 +4456,7 @@ ${darkRules}`;
     const samples = /* @__PURE__ */ new Map();
     for (const edge of edges) {
       const geo = geos.get(edge.id);
-      if (geo) samples.set(edge.id, sampleEdge(geo));
+      if (geo && !geo.detour) samples.set(edge.id, sampleEdge(geo));
     }
     const hops = /* @__PURE__ */ new Map();
     for (let i = 0; i < edges.length; i++) {
@@ -3927,6 +4485,7 @@ ${darkRules}`;
     return hops;
   }
   function edgePath(geo, hops) {
+    if (geo.detour?.length) return polylinePath(geo.detour);
     if (!hops?.length) return pathOf(geo);
     const usable = [];
     for (const t of [...hops].sort((a, b) => a - b)) {
