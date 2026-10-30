@@ -45,6 +45,11 @@ export interface EdgeGeometry {
   control: Point;
   mid: Point;
   offset: number;
+  /**
+   * Curve mode fallback: when no single quadratic can clear the node boxes,
+   * the edge follows this polyline (rendered with rounded corners) instead.
+   */
+  detour?: Point[];
 }
 
 export function bezierAt(p1: Point, c: Point, p2: Point, t: number): Point {
@@ -69,7 +74,7 @@ export interface GeometryContext {
   obstacles?: { id: string; rect: Rect }[];
   /** Areas routes prefer to avoid (group headers) but may cross when cheaper. */
   soft?: Rect[];
-  /** Endpoints pinned by edge bundling; overrides the natural anchor and fan. */
+  /** Endpoints pinned to a chosen side and point (edge bundles and side ports). */
   anchors?: Map<string, { from?: ForcedAnchor; to?: ForcedAnchor }>;
   /** Fixed trunk coordinate so bundled edges share one line into the node. */
   trunks?: Map<string, { x?: number; y?: number }>;
@@ -81,6 +86,9 @@ export interface ForcedAnchor {
 }
 
 const ANCHOR_MARGIN = 14;
+
+/** Smallest comfortable distance between two attachment points on one border. */
+export const PORT_GAP = 18;
 
 /** Usable stretch of a border that anchors may slide along. */
 export function sideRange(box: Rect, side: EdgeSide): { min: number; max: number } {
@@ -155,10 +163,43 @@ export function edgeGeometry(edge: EdgeDecl, ctx: GeometryContext): EdgeGeometry
   const spread = count > 1 ? (index - (count - 1) / 2) * PAIR_SPREAD * (reversed ? -1 : 1) : 0;
 
   const via = edge.via ?? { x: 0, y: 0 };
-  const control = {
+  const base = {
     x: mx + via.x + px * spread,
     y: my + via.y + py * spread,
   };
+  const obstacles = (ctx.obstacles ?? [])
+    .filter((item) => item.id !== edge.from && item.id !== edge.to)
+    .map((item) => item.rect);
+  let control = base;
+  if (obstacles.length) {
+    control = clearCurve(p1, base, p2, obstacles, false);
+    if (!curveClears(p1, control, p2, obstacles)) {
+      const moved = reanchorCurve(fromBox, toBox, p1, p2, via, spread, obstacles);
+      if (moved) {
+        p1 = moved.p1;
+        p2 = moved.p2;
+        control = moved.control;
+      } else {
+        // Dense layouts can leave no quadratic corridor at all; fall back to a
+        // rounded orthogonal detour rather than drawing through a node.
+        const detour = orthogonalRoute(edge, ctx, 0);
+        if (detour && !routeCrosses(detour.points, obstacles, 2)) {
+          p1 = detour.points[0]!;
+          p2 = detour.points[detour.points.length - 1]!;
+          return {
+            p1,
+            p2,
+            control: base,
+            mid: polylineMidpoint(detour.points),
+            offset: spread,
+            detour: detour.points,
+          };
+        }
+        // Last resort: a wide bow from the natural anchors.
+        control = clearCurve(p1, base, p2, obstacles);
+      }
+    }
+  }
 
   return {
     p1,
@@ -167,6 +208,189 @@ export function edgeGeometry(edge: EdgeDecl, ctx: GeometryContext): EdgeGeometry
     mid: bezierAt(p1, control, p2, 0.5),
     offset: spread,
   };
+}
+
+const CURVE_SAMPLES = 48;
+const CURVE_SAMPLES_MAX = 160;
+const CURVE_PAD = 3;
+
+/**
+ * Sample densely enough to catch a shallow graze, without paying the full
+ * maximum on short edges.
+ */
+function curveSampleCount(p1: Point, p2: Point): number {
+  const span = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+  return Math.max(CURVE_SAMPLES, Math.min(CURVE_SAMPLES_MAX, Math.ceil(span / 4)));
+}
+
+/** Number of sampled curve positions that sit inside a node box. */
+function curveCrossings(p1: Point, control: Point, p2: Point, obstacles: Rect[]): number {
+  let hits = 0;
+  const samples = curveSampleCount(p1, p2);
+  for (let i = 1; i < samples; i++) {
+    const point = bezierAt(p1, control, p2, i / samples);
+    for (const rect of obstacles) {
+      // Expand the box: the curve must keep a visible gap, not just avoid the
+      // interior. A line grazing a rounded corner still reads as covered.
+      if (
+        point.x > rect.x - CURVE_PAD &&
+        point.x < rect.x + rect.w + CURVE_PAD &&
+        point.y > rect.y - CURVE_PAD &&
+        point.y < rect.y + rect.h + CURVE_PAD
+      ) {
+        hits++;
+        break;
+      }
+    }
+  }
+  return hits;
+}
+
+/**
+ * Bow the control point away from the straight run until the curve clears every
+ * node. Tries the smallest offsets first, so a free line keeps its via exactly.
+ */
+function clearCurve(p1: Point, base: Point, p2: Point, obstacles: Rect[], ring = true): Point {
+  let best = base;
+  let bestHits = curveCrossings(p1, base, p2, obstacles);
+  if (bestHits === 0) return base;
+
+  const vx = p2.x - p1.x;
+  const vy = p2.y - p1.y;
+  const len = Math.hypot(vx, vy) || 1;
+  const nx = -vy / len;
+  const ny = vx / len;
+  const ux = vx / len;
+  const uy = vy / len;
+  const candidates: { point: Point; distance: number }[] = [];
+  for (const along of [0, 70, -70, 140, -140]) {
+    for (const perp of [0, 40, -40, 80, -80, 120, -120, 160, -160, 200, -200, 260, -260, 320, -320]) {
+      if (!along && !perp) continue;
+      const point = {
+        x: base.x + nx * perp + ux * along,
+        y: base.y + ny * perp + uy * along,
+      };
+      candidates.push({ point, distance: Math.hypot(perp, along) });
+    }
+  }
+  candidates.sort((a, b) => a.distance - b.distance);
+  for (const candidate of candidates) {
+    const hits = curveCrossings(p1, candidate.point, p2, obstacles);
+    if (hits === 0) return candidate.point;
+    if (hits < bestHits) {
+      best = candidate.point;
+      bestHits = hits;
+    }
+  }
+
+  if (ring) {
+    // A node sitting squarely between both endpoints needs a hairpin the fine
+    // grid cannot express. Sweep coarse rings around the base control instead
+    // of settling for the least-bad line through a box.
+    for (const radius of [400, 480, 560, 640, 720, 800]) {
+      for (const angle of [0, 45, -45, 90, -90, 135, -135, 180]) {
+        const rad = (angle * Math.PI) / 180;
+        const perp = radius * Math.cos(rad);
+        const along = radius * Math.sin(rad);
+        const point = {
+          x: base.x + nx * perp + ux * along,
+          y: base.y + ny * perp + uy * along,
+        };
+        if (curveCrossings(p1, point, p2, obstacles) === 0) return point;
+      }
+    }
+  }
+  return best;
+}
+
+/** True when the curve never enters a node box. */
+function curveClears(p1: Point, control: Point, p2: Point, obstacles: Rect[]): boolean {
+  return curveCrossings(p1, control, p2, obstacles) === 0;
+}
+
+/** Approximate arc length, used to compare re-anchored curves. */
+function curveLength(p1: Point, control: Point, p2: Point): number {
+  let total = 0;
+  let prev = p1;
+  for (let i = 1; i <= 24; i++) {
+    const point = bezierAt(p1, control, p2, i / 24);
+    total += Math.hypot(point.x - prev.x, point.y - prev.y);
+    prev = point;
+  }
+  return total;
+}
+
+/** The control point must sit on the outward side of the anchor it leaves. */
+function leavesAnchor(control: Point, anchor: Point, side: EdgeSide): boolean {
+  const out = SIDE_OUT[side];
+  return (control.x - anchor.x) * out.x + (control.y - anchor.y) * out.y > 0;
+}
+
+/**
+ * When no control point can clear the boxes from the natural anchors, move one
+ * or both endpoints to a neighbouring side. The cross-corridor case (a node
+ * sitting right between source and target) is the one a single quadratic cannot
+ * solve from the natural sides; re-anchoring keeps the line short instead of
+ * bowing it around the whole neighbourhood.
+ */
+function reanchorCurve(
+  fromBox: NodeBox,
+  toBox: NodeBox,
+  p1: Point,
+  p2: Point,
+  via: Point,
+  spread: number,
+  obstacles: Rect[],
+): { p1: Point; p2: Point; control: Point } | null {
+  const fromSide = edgeSide(p1, fromBox);
+  const toSide = edgeSide(p2, toBox);
+  const alternatives = (box: NodeBox, side: EdgeSide, anchor: Point) =>
+    SIDES.filter((item) => item !== side)
+      .map((item) => ({ side: item, point: sideMidpoint(box, item) }))
+      .sort(
+        (a, b) =>
+          Math.hypot(a.point.x - anchor.x, a.point.y - anchor.y) -
+          Math.hypot(b.point.x - anchor.x, b.point.y - anchor.y),
+      )
+      .slice(0, 2);
+  const fromOptions = alternatives(fromBox, fromSide, p1);
+  const toOptions = alternatives(toBox, toSide, p2);
+
+  type Attempt = { p1: Point; p2: Point; fromSide: EdgeSide; toSide: EdgeSide; changed: number };
+  const attempts: Attempt[] = [];
+  for (const option of fromOptions) {
+    attempts.push({ p1: option.point, p2, fromSide: option.side, toSide, changed: 1 });
+  }
+  for (const option of toOptions) {
+    attempts.push({ p1, p2: option.point, fromSide, toSide: option.side, changed: 1 });
+  }
+  for (const from of fromOptions) {
+    for (const to of toOptions) {
+      attempts.push({ p1: from.point, p2: to.point, fromSide: from.side, toSide: to.side, changed: 2 });
+    }
+  }
+
+  let best: { p1: Point; p2: Point; control: Point; score: number } | null = null;
+  for (const attempt of attempts) {
+    const mx = (attempt.p1.x + attempt.p2.x) / 2;
+    const my = (attempt.p1.y + attempt.p2.y) / 2;
+    const vx = attempt.p2.x - attempt.p1.x;
+    const vy = attempt.p2.y - attempt.p1.y;
+    const len = Math.hypot(vx, vy) || 1;
+    const base = {
+      x: mx + via.x + (-vy / len) * spread,
+      y: my + via.y + (vx / len) * spread,
+    };
+    const control = clearCurve(attempt.p1, base, attempt.p2, obstacles, false);
+    if (!curveClears(attempt.p1, control, attempt.p2, obstacles)) continue;
+    if (!leavesAnchor(control, attempt.p1, attempt.fromSide)) continue;
+    if (!leavesAnchor(control, attempt.p2, attempt.toSide)) continue;
+    const score = curveLength(attempt.p1, control, attempt.p2) + attempt.changed * 80;
+    if (!best || score < best.score) {
+      best = { p1: attempt.p1, p2: attempt.p2, control, score };
+    }
+  }
+  return best ? { p1: best.p1, p2: best.p2, control: best.control } : null;
 }
 
 export function groupBoundingBox(
@@ -312,7 +536,7 @@ function cleanPoints(points: Point[]): Point[] {
 
 const SIDES: EdgeSide[] = ["left", "right", "top", "bottom"];
 
-/** The single attachment point of a side: every edge meets the node there. */
+/** Midpoint of a side, used when a caller has no explicit port to honor. */
 export function sideMidpoint(box: Rect, side: EdgeSide): Point {
   const cx = box.x + box.w / 2;
   const cy = box.y + box.h / 2;
@@ -320,6 +544,252 @@ export function sideMidpoint(box: Rect, side: EdgeSide): Point {
   if (side === "right") return { x: box.x + box.w, y: cy };
   if (side === "top") return { x: cx, y: box.y };
   return { x: cx, y: box.y + box.h };
+}
+
+/** A border point at `along` (y for left/right, x for top/bottom), kept on the border. */
+export function sidePoint(box: Rect, side: EdgeSide, along: number): Point {
+  const range = sideRange(box, side);
+  const value = clampNumber(along, range.min, range.max);
+  if (side === "left") return { x: box.x, y: value };
+  if (side === "right") return { x: box.x + box.w, y: value };
+  if (side === "top") return { x: value, y: box.y };
+  return { x: value, y: box.y + box.h };
+}
+
+/** Where a point projects onto a border, clamped into its usable stretch. */
+export function sideAlong(box: Rect, side: EdgeSide, point: Point): number {
+  const range = sideRange(box, side);
+  return clampNumber(side === "left" || side === "right" ? point.y : point.x, range.min, range.max);
+}
+
+/**
+ * Attachment positions for `count` groups sharing one border. They sit
+ * symmetrically around the side midpoint and shrink their step when the border
+ * is crowded, so every group keeps its own point inside the usable stretch.
+ */
+export function portPositions(box: Rect, side: EdgeSide, count: number, gap = PORT_GAP): number[] {
+  if (count <= 0) return [];
+  const range = sideRange(box, side);
+  const mid = (range.min + range.max) / 2;
+  if (count === 1) return [mid];
+  const step = Math.min(gap, (range.max - range.min) / (count - 1));
+  const start = mid - (step * (count - 1)) / 2;
+  return Array.from({ length: count }, (_, index) => start + index * step);
+}
+
+export interface PortGroup {
+  key: string;
+  /** Preferred coordinate along the border; orders groups on the rail. */
+  desired?: number;
+}
+
+export interface SidePort {
+  key: string;
+  side: EdgeSide;
+  point: Point;
+}
+
+/**
+ * Give every group on a border its own attachment point. Callers put inbound
+ * and outbound edges in different groups, so a line entering a node can never
+ * sit on top of a line leaving it.
+ */
+export function planSidePorts(
+  box: Rect,
+  side: EdgeSide,
+  groups: PortGroup[],
+  gap = PORT_GAP,
+): SidePort[] {
+  const ordered = [...groups].sort((a, b) => {
+    const delta = (a.desired ?? 0) - (b.desired ?? 0);
+    if (delta) return delta;
+    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+  });
+  const positions = portPositions(box, side, ordered.length, gap);
+  return ordered.map((group, index) => ({
+    key: group.key,
+    side,
+    point: sidePoint(box, side, positions[index]!),
+  }));
+}
+
+/** A smart-guide line drawn while a drag is snapped into alignment. */
+export interface AlignmentGuide {
+  /** A vertical line when `x`, a horizontal one when `y`. */
+  axis: "x" | "y";
+  /** Where the line sits on its axis (world coordinates). */
+  at: number;
+  /** Extent of the line along the other axis, already padded past both boxes. */
+  from: number;
+  to: number;
+}
+
+export interface SnapResult {
+  dx: number;
+  dy: number;
+  guides: AlignmentGuide[];
+}
+
+const GUIDE_PAD = 10;
+/** Slack used when deciding which boxes a guide line spans. */
+const GUIDE_EPSILON = 0.5;
+
+function unionOf(rects: Rect[]): Rect | null {
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const rect of rects) {
+    left = Math.min(left, rect.x);
+    top = Math.min(top, rect.y);
+    right = Math.max(right, rect.x + rect.w);
+    bottom = Math.max(bottom, rect.y + rect.h);
+  }
+  if (!Number.isFinite(left)) return null;
+  return { x: left, y: top, w: right - left, h: bottom - top };
+}
+
+/** The three lines of a box that other boxes may align to. */
+function anchorsOf(box: Rect, axis: "x" | "y"): number[] {
+  if (axis === "x") return [box.x, box.x + box.w / 2, box.x + box.w];
+  return [box.y, box.y + box.h / 2, box.y + box.h];
+}
+
+/**
+ * Smart guides for dragging. `moving` are the pre-drag boxes, `targets` the
+ * boxes that stay put; the drag delta is nudged (at most `threshold` on each
+ * axis, independently) so a border or centre of the moving set lands exactly on
+ * a matching line of another box. The returned guides span every box sharing
+ * that line, so the UI can draw one continuous rule.
+ */
+export function snapAlignment(
+  moving: Rect[],
+  targets: Rect[],
+  dx: number,
+  dy: number,
+  threshold: number,
+): SnapResult {
+  if (!moving.length || !targets.length || !(threshold > 0)) return { dx, dy, guides: [] };
+  const moved = moving.map((rect): Rect => ({ ...rect, x: rect.x + dx, y: rect.y + dy }));
+  const group = unionOf(moved);
+  if (!group) return { dx, dy, guides: [] };
+
+  const closest = (axis: "x" | "y"): { delta: number; at: number } | null => {
+    // Candidate lines come from every moved box plus the group's own bounds, so
+    // a multi-selection can also align its joint centre to another box.
+    const sources = [...moved.flatMap((box) => anchorsOf(box, axis)), ...anchorsOf(group, axis)];
+    let best: { delta: number; at: number } | null = null;
+    for (const target of targets) {
+      for (const at of anchorsOf(target, axis)) {
+        for (const source of sources) {
+          const delta = at - source;
+          if (Math.abs(delta) > threshold) continue;
+          if (!best || Math.abs(delta) < Math.abs(best.delta)) best = { delta, at };
+        }
+      }
+    }
+    return best;
+  };
+
+  const snapX = closest("x");
+  const snapY = closest("y");
+  const snapped = {
+    x: group.x + (snapX?.delta ?? 0),
+    y: group.y + (snapY?.delta ?? 0),
+    w: group.w,
+    h: group.h,
+  };
+
+  const span = (axis: "x" | "y", at: number): { from: number; to: number } | null => {
+    let from = Infinity;
+    let to = -Infinity;
+    for (const box of [...moved, ...targets]) {
+      if (!anchorsOf(box, axis).some((value) => Math.abs(value - at) < GUIDE_EPSILON)) continue;
+      if (axis === "x") {
+        from = Math.min(from, box.y);
+        to = Math.max(to, box.y + box.h);
+      } else {
+        from = Math.min(from, box.x);
+        to = Math.max(to, box.x + box.w);
+      }
+    }
+    return Number.isFinite(from) ? { from, to } : null;
+  };
+
+  const guides: AlignmentGuide[] = [];
+  if (snapX) {
+    const line = span("x", snapX.at);
+    if (line) guides.push({
+      axis: "x",
+      at: snapX.at,
+      from: Math.min(line.from, snapped.y) - GUIDE_PAD,
+      to: Math.max(line.to, snapped.y + snapped.h) + GUIDE_PAD,
+    });
+  }
+  if (snapY) {
+    const line = span("y", snapY.at);
+    if (line) guides.push({
+      axis: "y",
+      at: snapY.at,
+      from: Math.min(line.from, snapped.x) - GUIDE_PAD,
+      to: Math.max(line.to, snapped.x + snapped.w) + GUIDE_PAD,
+    });
+  }
+
+  return { dx: dx + (snapX?.delta ?? 0), dy: dy + (snapY?.delta ?? 0), guides };
+}
+
+/** A box taking part in an align / distribute command. */
+export interface AlignItem {
+  id: string;
+  rect: Rect;
+}
+
+function axisCenter(rect: Rect, axis: "x" | "y"): number {
+  return axis === "x" ? rect.x + rect.w / 2 : rect.y + rect.h / 2;
+}
+
+/**
+ * Centre every box on the selection's bounding-box centre for `axis`, keeping
+ * the other coordinate. Node boxes all share one size, so this one command
+ * covers left, right and centre alignment at once.
+ */
+export function alignBoxes(items: AlignItem[], axis: "x" | "y"): Map<string, Point> {
+  const result = new Map<string, Point>();
+  if (items.length < 2) return result;
+  const bounds = unionOf(items.map((item) => item.rect));
+  if (!bounds) return result;
+  const center = axisCenter(bounds, axis);
+  for (const { id, rect } of items) {
+    result.set(id, {
+      x: axis === "x" ? Math.round(center - rect.w / 2) : rect.x,
+      y: axis === "y" ? Math.round(center - rect.h / 2) : rect.y,
+    });
+  }
+  return result;
+}
+
+/**
+ * Spread the boxes strictly between the two extremes so their centres are
+ * evenly spaced; the extremes stay put. Needs at least three boxes to mean
+ * anything, and returns only the boxes that move.
+ */
+export function distributeBoxes(items: AlignItem[], axis: "x" | "y"): Map<string, Point> {
+  const result = new Map<string, Point>();
+  if (items.length < 3) return result;
+  const ordered = [...items].sort((a, b) => axisCenter(a.rect, axis) - axisCenter(b.rect, axis));
+  const first = axisCenter(ordered[0]!.rect, axis);
+  const last = axisCenter(ordered[ordered.length - 1]!.rect, axis);
+  const step = (last - first) / (ordered.length - 1);
+  ordered.forEach((item, index) => {
+    if (index === 0 || index === ordered.length - 1) return;
+    const center = first + step * index;
+    result.set(item.id, {
+      x: axis === "x" ? Math.round(center - item.rect.w / 2) : item.rect.x,
+      y: axis === "y" ? Math.round(center - item.rect.h / 2) : item.rect.y,
+    });
+  });
+  return result;
 }
 
 export function primarySide(box: NodeBox, other: NodeBox): EdgeSide {
@@ -335,6 +805,39 @@ function segmentHitsRect(a: Point, b: Point, rect: Rect, pad: number): boolean {
   const y0 = Math.min(a.y, b.y);
   const y1 = Math.max(a.y, b.y);
   return x1 > rect.x - pad && x0 < rect.x + rect.w + pad && y1 > rect.y - pad && y0 < rect.y + rect.h + pad;
+}
+
+/** True when any segment of an axis-aligned polyline enters one of the rects. */
+export function routeCrosses(points: Point[], obstacles: Rect[], pad = 0): boolean {
+  for (let i = 1; i < points.length; i++) {
+    for (const rect of obstacles) {
+      if (segmentHitsRect(points[i - 1]!, points[i]!, rect, pad)) return true;
+    }
+  }
+  return false;
+}
+
+/** Point halfway along a polyline, by arc length. */
+export function polylineMidpoint(points: Point[]): Point {
+  if (!points.length) return { x: 0, y: 0 };
+  if (points.length === 1) return points[0]!;
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    total += Math.hypot(points[i]!.x - points[i - 1]!.x, points[i]!.y - points[i - 1]!.y);
+  }
+  let walked = 0;
+  const half = total / 2;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1]!;
+    const b = points[i]!;
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (walked + len >= half) {
+      const k = len < 1e-6 ? 0 : (half - walked) / len;
+      return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
+    }
+    walked += len;
+  }
+  return points[points.length - 1]!;
 }
 
 function routeScore(points: Point[], obstacles: Rect[], soft: Rect[]): number {
@@ -354,6 +857,17 @@ function routeScore(points: Point[], obstacles: Rect[], soft: Rect[]): number {
   return score + length * 0.05 + Math.max(0, points.length - 3) * 8;
 }
 
+/** Number of polyline segments that cut through a node box. */
+function segmentCrossings(points: Point[], obstacles: Rect[]): number {
+  let hits = 0;
+  for (let i = 1; i < points.length; i++) {
+    for (const rect of obstacles) {
+      if (segmentHitsRect(points[i - 1]!, points[i]!, rect, 6)) hits++;
+    }
+  }
+  return hits;
+}
+
 /** Route between two chosen anchors; both stubs leave perpendicular to their border. */
 function routeBetween(
   p1: Point,
@@ -362,6 +876,7 @@ function routeBetween(
   side2: EdgeSide,
   lane: number,
   trunk?: { x?: number; y?: number },
+  obstacles: Rect[] = [],
 ): OrthogonalRoute {
   const o1 = SIDE_OUT[side1];
   const o2 = SIDE_OUT[side2];
@@ -456,7 +971,15 @@ function routeBetween(
         };
       }
       const corner = { x: a2.x, y: a1.y };
-      return { points: cleanPoints([p1, a1, corner, a2, p2]), junction: corner };
+      const direct = cleanPoints([p1, a1, corner, a2, p2]);
+      const bendX = a1.x + o1.x * 26;
+      const bendY = a2.y + o2.y * 26;
+      const bent = cleanPoints([p1, a1, { x: bendX, y: a1.y }, { x: bendX, y: bendY }, { x: a2.x, y: bendY }, a2, p2]);
+      // A one-corner shortcut can graze a node that a two-corner step clears.
+      if (segmentCrossings(direct, obstacles) > segmentCrossings(bent, obstacles)) {
+        return { points: bent, junction: { x: bendX, y: bendY } };
+      }
+      return { points: direct, junction: corner };
     }
     const x = a1.x + o1.x * 26;
     const y = a2.y + o2.y * 26;
@@ -477,7 +1000,14 @@ function routeBetween(
       };
     }
     const corner = { x: a1.x, y: a2.y };
-    return { points: cleanPoints([p1, a1, corner, a2, p2]), junction: corner };
+    const direct = cleanPoints([p1, a1, corner, a2, p2]);
+    const bendY = a1.y + o1.y * 26;
+    const bendX = a2.x + o2.x * 26;
+    const bent = cleanPoints([p1, a1, { x: a1.x, y: bendY }, { x: bendX, y: bendY }, { x: bendX, y: a2.y }, a2, p2]);
+    if (segmentCrossings(direct, obstacles) > segmentCrossings(bent, obstacles)) {
+      return { points: bent, junction: { x: bendX, y: bendY } };
+    }
+    return { points: direct, junction: corner };
   }
   const y = a1.y + o1.y * 26;
   const x = a2.x + o2.x * 26;
@@ -516,6 +1046,7 @@ export function orthogonalRoute(edge: EdgeDecl, ctx: GeometryContext, lane = 0):
         side2,
         lane,
         trunk,
+        obstacles,
       );
       let score = routeScore(route.points, obstacles, soft);
       if (side1 !== natural1) score += 8;

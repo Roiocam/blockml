@@ -1,6 +1,8 @@
 import {
   applyLayout,
+  alignBoxes,
   anchorPoint,
+  distributeBoxes,
   parse,
   DEFAULT_BOX,
   autoLayout,
@@ -19,20 +21,25 @@ import {
   isNodeVisible,
   layoutDocument,
   nodeDisplayName,
+  planSidePorts,
   relatedEdges,
   relatedNodes,
   nodeKindStyle,
   pathOf,
   primarySide,
   resolveVisibility,
+  routeCrosses,
   serialize,
+  sideAlong,
   sideMidpoint,
   sideRange,
+  snapAlignment,
   visibleEdges,
   visibleGroups,
   visibleNodes,
   GROUP_HEAD,
   GROUP_PAD,
+  type AlignmentGuide,
   type BlockDocument,
   type Diagnostic,
   type EdgeDecl,
@@ -46,6 +53,7 @@ import {
   type OrthogonalRoute,
   type ParseResult,
   type Point,
+  type PortGroup,
   type Rect,
   type RouteStyle,
   type Visibility,
@@ -53,6 +61,12 @@ import {
 import { VIEWER_CSS } from "./styles.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
+/** Lane offsets tried for orthogonal routes, nearest first. */
+const ORTHO_LANES = [0, 1, -1, 2, -2, 3, -3, 4, -4];
+/** Sides a bundle may share, in preference order when scores tie. */
+const BUNDLE_SIDES: EdgeSide[] = ["top", "right", "bottom", "left"];
+/** How close (screen px) a dragged border must come to snap onto a guide. */
+const SNAP_RADIUS = 6;
 
 export interface ViewerOptions {
   source: string;
@@ -60,6 +74,11 @@ export interface ViewerOptions {
   theme?: "light" | "dark";
   showLegend?: boolean;
   showInspector?: boolean;
+  /**
+   * Smart guides while dragging: pull a node onto another node's border or
+   * centre line. Defaults to true; hold Alt while dragging to move freely.
+   */
+  snap?: boolean;
   onSourceChange?: (source: string) => void;
   onDiagnostics?: (diagnostics: Diagnostic[]) => void;
   /** Fired whenever a group is collapsed or a group/node is hidden. */
@@ -70,6 +89,15 @@ export interface ViewerVisibility {
   hiddenNodes: string[];
   hiddenGroups: string[];
   collapsedGroups: string[];
+}
+
+interface BundleGroup {
+  name: string;
+  end: "from" | "to";
+  nodeId: string;
+  side: EdgeSide;
+  centroid: Point;
+  edges: EdgeDecl[];
 }
 
 export interface ViewerHandle {
@@ -159,11 +187,14 @@ class Viewer implements ViewerHandle {
   private headerLayer: SVGGElement;
   private labelLayer: SVGGElement;
   private uiLayer: SVGGElement;
+  /** Snap guides, kept above the nodes so a rule reads across every box. */
+  private guideLayer: SVGGElement;
   private overlayLayer: SVGGElement;
   private defs: SVGDefsElement;
   private legend: HTMLElement;
   private inspector: HTMLElement;
   private layersPanel: HTMLElement;
+  private alignBar: HTMLElement;
   private errorBox: HTMLElement;
 
   private options: ViewerOptions;
@@ -180,6 +211,7 @@ class Viewer implements ViewerHandle {
   private pointerSelected = false;
   private fans = new Map<string, { from?: number; to?: number }>();
   private bundleOf = new Map<string, string>();
+  private bundleGroups: BundleGroup[] = [];
   private bundleInfo = new Map<
     string,
     { end: "from" | "to"; trunk?: { x?: number; y?: number }; sharedX: number; sharedY: number }
@@ -222,6 +254,7 @@ class Viewer implements ViewerHandle {
     this.nodeLayer = el("g", { class: "bml-nodes" });
     this.labelLayer = el("g", { class: "bml-labels" });
     this.uiLayer = el("g", { class: "bml-ui" });
+    this.guideLayer = el("g", { class: "bml-guides" });
     this.overlayLayer = el("g", { class: "bml-overlay" });
 
     this.svg.appendChild(this.defs);
@@ -231,6 +264,7 @@ class Viewer implements ViewerHandle {
     this.viewport.appendChild(this.nodeLayer);
     this.viewport.appendChild(this.labelLayer);
     this.viewport.appendChild(this.uiLayer);
+    this.viewport.appendChild(this.guideLayer);
     this.viewport.appendChild(this.overlayLayer);
     this.svg.appendChild(this.viewport);
     this.root.appendChild(this.svg);
@@ -252,6 +286,23 @@ class Viewer implements ViewerHandle {
     this.layersPanel.className = "bml-layers";
     this.root.appendChild(this.layersPanel);
     this.bindLayersPanel();
+
+    this.alignBar = document.createElement("div");
+    this.alignBar.className = "bml-align-bar";
+    this.alignBar.setAttribute("role", "toolbar");
+    this.alignBar.setAttribute("aria-label", "多选对齐");
+    this.alignBar.innerHTML =
+      `<span class="bml-align-count" title="Shift / Ctrl 点选或 Shift+拖拽框选；Cmd/Ctrl+A 全选"></span><span class="bml-align-sep"></span>` +
+      `<button type="button" data-bml-align="align-x" title="按中线对成一列">纵向对齐</button>` +
+      `<button type="button" data-bml-align="align-y" title="按中线对成一行">横向对齐</button>` +
+      `<button type="button" data-bml-align="dist-x" title="首尾不动，水平间距相等">水平等距</button>` +
+      `<button type="button" data-bml-align="dist-y" title="首尾不动，垂直间距相等">垂直等距</button>`;
+    this.alignBar.addEventListener("click", (event) => {
+      const button = (event.target as Element | null)?.closest<HTMLButtonElement>("button[data-bml-align]");
+      if (!button || button.disabled) return;
+      this.applyAlign(button.dataset.bmlAlign!);
+    });
+    this.root.appendChild(this.alignBar);
 
     this.buildDefs();
     this.bindCanvas();
@@ -370,25 +421,75 @@ class Viewer implements ViewerHandle {
     });
     el("circle", { cx: 1.2, cy: 1.2, r: 1.05, class: "bml-grid-dot" }, pattern);
     this.defs.appendChild(pattern);
+  }
 
+  /* ------------------------------------------------------------- edge paint */
+
+  /**
+   * Arrowheads point at the target, so their color is the target node's color.
+   * Rebuild them per render because visibility and edits change which kinds the
+   * diagram actually shows.
+   */
+  private renderEdgeDefs(nodes: Map<string, NodeDecl>): void {
+    this.defs.querySelectorAll("[data-bml-edge-def]").forEach((node) => node.remove());
+    if (!this.viewDoc) return;
     const kinds = new Set<string>();
-    if (this.doc) for (const edge of this.doc.edges) kinds.add(edge.kind);
-    for (const kind of ["rest", "acp", "sse", "sql", "rpc", "oidc", "llm", "mcp", "ws", "gate", "opt"]) {
-      kinds.add(kind);
+    for (const edge of this.viewDoc.edges) {
+      const to = nodes.get(edge.to);
+      if (to) kinds.add(to.kind);
     }
     for (const kind of kinds) {
       const marker = el("marker", {
-        id: `bml-arrow-${kind}`,
+        id: `bml-arrow-to-${kind}`,
         viewBox: "0 0 10 10",
         refX: 8.4,
         refY: 5,
         markerWidth: 6.6,
         markerHeight: 6.6,
         orient: "auto-start-reverse",
-      });
-      el("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: edgeKindStyle(kind).color }, marker);
-      this.defs.appendChild(marker);
+        "data-bml-edge-def": "",
+      }, this.defs);
+      el("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: nodeKindStyle(kind).color }, marker);
     }
+  }
+
+  /**
+   * Edges fade from the source node color to the target node color. At a node
+   * every outgoing line therefore starts in the same lighter tone while every
+   * incoming line ends in that node's solid tone, so direction stays readable
+   * even when both sides use the same border.
+   */
+  private edgePaint(
+    edge: EdgeDecl,
+    start: Point,
+    end: Point,
+    nodes: Map<string, NodeDecl>,
+    index: number,
+  ): string {
+    const from = nodes.get(edge.from);
+    const to = nodes.get(edge.to);
+    if (!from || !to) return nodeKindStyle("ext").color;
+    const source = nodeKindStyle(from.kind).color;
+    const target = nodeKindStyle(to.kind).color;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return target;
+    // Keep the source tint to a short collar that follows the port, then run
+    // in the target color: the line reads as belonging to where it is going.
+    const reach = Math.min(1, 72 / (Math.hypot(dx, dy) || 1));
+    const id = `bml-edge-paint-${index}`;
+    const gradient = el("linearGradient", {
+      id,
+      gradientUnits: "userSpaceOnUse",
+      x1: start.x,
+      y1: start.y,
+      x2: start.x + dx * reach,
+      y2: start.y + dy * reach,
+      "data-bml-edge-def": "",
+    }, this.defs);
+    el("stop", { offset: "0%", "stop-color": lightenHex(source, 0.55) }, gradient);
+    el("stop", { offset: "100%", "stop-color": target }, gradient);
+    return `url(#${id})`;
   }
 
   private render(): void {
@@ -404,6 +505,7 @@ class Viewer implements ViewerHandle {
     this.headerLayer.innerHTML = "";
     this.labelLayer.innerHTML = "";
     this.uiLayer.innerHTML = "";
+    this.guideLayer.innerHTML = "";
     this.overlayLayer.innerHTML = "";
 
     const grid = el("rect", {
@@ -496,12 +598,16 @@ class Viewer implements ViewerHandle {
     }
   }
 
-  private edgeGeometryOf(edge: EdgeDecl): EdgeGeometry | null {
+  private edgeGeometryOf(
+    edge: EdgeDecl,
+    obstacles?: { id: string; rect: Rect }[],
+  ): EdgeGeometry | null {
     if (!this.viewDoc) return null;
     return edgeGeometry(edge, {
       byId: this.nodeMap(),
       pairs: indexPairs(this.viewDoc),
       fans: this.fans,
+      obstacles,
     });
   }
 
@@ -567,8 +673,9 @@ class Viewer implements ViewerHandle {
    * trunk, so a node reaching several peers draws one line that branches out
    * instead of a stack of near-parallel ones.
    */
-  private computeBundles(): void {
+  private computeBundles(obstacles: { id: string; rect: Rect }[] = []): void {
     this.bundleOf = new Map();
+    this.bundleGroups = [];
     this.bundleInfo = new Map();
     this.forcedAnchors = new Map();
     this.trunks = new Map();
@@ -605,12 +712,55 @@ class Viewer implements ViewerHandle {
         x: peers.reduce((sum, item) => sum + item.box.cx, 0) / peers.length,
         y: peers.reduce((sum, item) => sum + item.box.cy, 0) / peers.length,
       };
-      const side = edgeSide(anchorPoint(sharedNode, centroid), sharedBox);
+      let side = edgeSide(anchorPoint(sharedNode, centroid), sharedBox);
+      // The centroid only says where the peers are; a node in between can make
+      // that side unusable. Probe the four sides and keep the centroid side
+      // unless another one routes every peer around the boxes.
+      if (obstacles.length) {
+        const probe = (candidate: EdgeSide): number => {
+          const port = sideMidpoint(sharedBox, candidate);
+          const anchors = new Map<string, { from?: ForcedAnchor; to?: ForcedAnchor }>();
+          for (const item of peers) {
+            const anchor = { point: port, side: candidate };
+            anchors.set(item.edge.id, end === "from" ? { from: anchor } : { to: anchor });
+          }
+          const context = { byId: nodes, pairs: new Map(), obstacles, anchors };
+          let score = 0;
+          for (const item of peers) {
+            const route = orthogonalRoute(item.edge, context, 0);
+            if (!route) return Number.POSITIVE_INFINITY;
+            const blockers = obstacles
+              .filter((entry) => entry.id !== item.edge.from && entry.id !== item.edge.to)
+              .map((entry) => entry.rect);
+            if (routeCrosses(route.points, blockers, 2)) score += 1000;
+            for (let i = 1; i < route.points.length; i++) {
+              const a = route.points[i - 1]!;
+              const b = route.points[i]!;
+              score += Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
+            }
+            score += route.points.length * 6;
+          }
+          return score;
+        };
+        let bestScore = probe(side);
+        for (const candidate of BUNDLE_SIDES) {
+          if (candidate === side) continue;
+          const score = probe(candidate);
+          if (score < bestScore - 1) {
+            bestScore = score;
+            side = candidate;
+          }
+        }
+      }
       const point = sideMidpoint(sharedBox, side);
       const horizontal = side === "left" || side === "right";
       const others = peers.map((item) => {
         const peerPoint = anchorPoint(item.node, { x: sharedBox.cx, y: sharedBox.cy });
-        return { side: edgeSide(peerPoint, item.box), at: horizontal ? peerPoint.x : peerPoint.y };
+        return {
+          side: edgeSide(peerPoint, item.box),
+          point: peerPoint,
+          at: horizontal ? peerPoint.x : peerPoint.y,
+        };
       });
       let trunk: { x?: number; y?: number } | undefined;
       const sameAxis = others.every((peer) => (peer.side === "left" || peer.side === "right") === horizontal);
@@ -633,6 +783,39 @@ class Viewer implements ViewerHandle {
         const valid = outward > 0 ? at >= nearNode && at <= nearPeers : at <= nearNode && at >= nearPeers;
         if (valid) trunk = horizontal ? { x: at } : { y: at };
       }
+      // A shared trunk must stay outside other nodes. If it would cut through
+      // one, give up the trunk (and its label window) rather than draw a line
+      // behind a node; the edges still share their port and route individually.
+      if (trunk && obstacles.length) {
+        const skip = new Set([sharedNode.id, ...peers.map((item) => item.node.id)]);
+        const rects = obstacles.filter((item) => !skip.has(item.id)).map((item) => item.rect);
+        const segments: Point[][] = [];
+        if (horizontal) {
+          const borderX = side === "left" ? sharedBox.x : sharedBox.x + sharedBox.w;
+          segments.push([{ x: borderX, y: point.y }, { x: trunk.x!, y: point.y }]);
+          for (const peer of others) {
+            segments.push([{ x: trunk.x!, y: point.y }, { x: trunk.x!, y: peer.point.y }]);
+          }
+        } else {
+          const borderY = side === "top" ? sharedBox.y : sharedBox.y + sharedBox.h;
+          segments.push([{ x: point.x, y: borderY }, { x: point.x, y: trunk.y! }]);
+          for (const peer of others) {
+            segments.push([{ x: point.x, y: trunk.y! }, { x: peer.point.x, y: trunk.y! }]);
+          }
+        }
+        // Ports shift the shared point by up to ~17px; keep a safety margin.
+        if (segments.some((segment) => routeCrosses(segment, rects, 24))) trunk = undefined;
+      }
+      // The final point is assigned together with every other port on this
+      // border; keep the midpoint until computePorts() owns the rail.
+      this.bundleGroups.push({
+        name,
+        end,
+        nodeId: sharedNode.id,
+        side,
+        centroid,
+        edges: peers.map((item) => item.edge),
+      });
       for (const item of peers) {
         this.bundleOf.set(item.edge.id, name);
         this.bundleInfo.set(item.edge.id, { end, trunk, sharedX: point.x, sharedY: point.y });
@@ -645,41 +828,114 @@ class Viewer implements ViewerHandle {
   }
 
   /**
-   * Orthogonal routes for every edge. Lanes shift the trunk/stub of an edge so
-   * no two edges draw on the same line; leftover conflicts are repaired by
-   * re-laning the earlier edge while the total overlap keeps dropping.
+   * Ports are assigned after a first routing pass: only sides that actually
+   * carry edges are considered, and inbound/outbound edges on one side get
+   * separate attachment points while their own groups still share one. Bundles
+   * keep their own point on the same rail. The final pass is pinned to these
+   * ports, so a line entering a node can never sit on a line leaving it.
    */
-  private buildOrthogonalRoutes(
-    nodeObstacles: { id: string; rect: Rect }[],
-    soft: Rect[],
+  private computePorts(baseline: Map<string, OrthogonalRoute>): void {
+    if (!this.viewDoc) return;
+    const nodes = this.nodeMap();
+    const boxes = new Map([...nodes].map(([id, node]) => [id, boxOf(node)]));
+    type SideUse = {
+      box: NodeBox;
+      ins: EdgeDecl[];
+      outs: EdgeDecl[];
+      bundles: BundleGroup[];
+    };
+    const uses = new Map<string, SideUse>();
+    const useOf = (nodeId: string, side: EdgeSide): SideUse => {
+      const key = `${nodeId}\u0000${side}`;
+      let use = uses.get(key);
+      if (!use) {
+        use = { box: boxes.get(nodeId)!, ins: [], outs: [], bundles: [] };
+        uses.set(key, use);
+      }
+      return use;
+    };
+    for (const group of this.bundleGroups) {
+      useOf(group.nodeId, group.side).bundles.push(group);
+    }
+    for (const edge of this.viewDoc.edges) {
+      const route = baseline.get(edge.id);
+      if (!route) continue;
+      const fromBox = boxes.get(edge.from);
+      const toBox = boxes.get(edge.to);
+      if (!fromBox || !toBox) continue;
+      const bundled = this.bundleInfo.get(edge.id)?.end;
+      if (bundled !== "from") {
+        useOf(edge.from, edgeSide(route.points[0]!, fromBox)).outs.push(edge);
+      }
+      if (bundled !== "to") {
+        const last = route.points[route.points.length - 1]!;
+        useOf(edge.to, edgeSide(last, toBox)).ins.push(edge);
+      }
+    }
+
+    for (const [key, use] of uses) {
+      const side = key.slice(key.indexOf("\u0000") + 1) as EdgeSide;
+      const groups: PortGroup[] = use.bundles.map((bundle) => ({
+        key: `bundle:${bundle.name}`,
+        desired: sideAlong(use.box, side, bundle.centroid),
+      }));
+      const bundles = new Map(use.bundles.map((bundle) => [`bundle:${bundle.name}`, bundle]));
+      if (use.ins.length) {
+        const desired =
+          use.ins.reduce((sum, edge) => {
+            const other = boxes.get(edge.from);
+            return sum + (other ? sideAlong(use.box, side, { x: other.cx, y: other.cy }) : 0);
+          }, 0) / use.ins.length;
+        groups.push({ key: "in", desired });
+      }
+      if (use.outs.length) {
+        const desired =
+          use.outs.reduce((sum, edge) => {
+            const other = boxes.get(edge.to);
+            return sum + (other ? sideAlong(use.box, side, { x: other.cx, y: other.cy }) : 0);
+          }, 0) / use.outs.length;
+        groups.push({ key: "out", desired });
+      }
+      if (!groups.length) continue;
+
+      for (const port of planSidePorts(use.box, side, groups)) {
+        const bundle = bundles.get(port.key);
+        if (bundle) {
+          for (const edge of bundle.edges) {
+            const forced = this.forcedAnchors.get(edge.id) ?? {};
+            forced[bundle.end] = { point: port.point, side };
+            this.forcedAnchors.set(edge.id, forced);
+            const info = this.bundleInfo.get(edge.id);
+            if (info) {
+              info.sharedX = port.point.x;
+              info.sharedY = port.point.y;
+            }
+          }
+          continue;
+        }
+        if (port.key !== "in" && port.key !== "out") continue;
+        const end = port.key === "in" ? "to" : "from";
+        const list = port.key === "in" ? use.ins : use.outs;
+        for (const edge of list) {
+          const forced = this.forcedAnchors.get(edge.id) ?? {};
+          forced[end] = { point: port.point, side };
+          this.forcedAnchors.set(edge.id, forced);
+        }
+      }
+    }
+  }
+
+  /**
+   * Greedy lane assignment plus overlap repair for one candidate set.
+   */
+  private selectRoutes(
+    edges: EdgeDecl[],
+    candidates: Map<string, Map<number, OrthogonalRoute>>,
+    byId: Map<string, NodeDecl>,
+    paint = false,
+    obstacles: { id: string; rect: Rect }[] = [],
   ): Map<string, OrthogonalRoute> {
     const routes = new Map<string, OrthogonalRoute>();
-    if (!this.viewDoc) return routes;
-    this.computeBundles();
-    const ctx = {
-      byId: this.nodeMap(),
-      pairs: indexPairs(this.viewDoc),
-      fans: this.fans,
-      obstacles: nodeObstacles,
-      soft,
-      anchors: this.forcedAnchors,
-      trunks: this.trunks,
-    };
-    const edges = this.viewDoc.edges;
-    const LANES = [0, 1, -1, 2, -2, 3, -3, 4, -4];
-    // The router scores every side pair per lane, so compute the candidates
-    // once up front; the greedy and repair passes only look them up.
-    const candidates = new Map<string, Map<number, OrthogonalRoute>>();
-    for (const edge of edges) {
-      const perLane = new Map<number, OrthogonalRoute>();
-      // Bundled edges share one trunk, so they must stay on the base lane.
-      const lanesFor = this.bundleOf.has(edge.id) ? [0] : LANES;
-      for (const lane of lanesFor) {
-        const route = orthogonalRoute(edge, ctx, lane);
-        if (route) perLane.set(lane, route);
-      }
-      candidates.set(edge.id, perLane);
-    }
     const lanes = new Map<string, number>();
     const routeOf = (edge: EdgeDecl): OrthogonalRoute | undefined =>
       candidates.get(edge.id)?.get(lanes.get(edge.id) ?? 0);
@@ -688,15 +944,39 @@ class Viewer implements ViewerHandle {
       const bundle = this.bundleOf.get(a);
       return bundle !== undefined && bundle === this.bundleOf.get(b);
     };
-    // Two edges in the same color can share a line and still read as one
-    // stroke, so their overlap is a soft cost; different colors must separate.
-    const colorOf = new Map(edges.map((edge) => [edge.id, edgeKindStyle(edge.kind).color]));
+    // Lane separation follows the stroke color. The first pass keeps protocol
+    // colors so repainting never changes side choices; the final pass compares
+    // the actual gradient (source kind -> target kind) before merging lines.
+    const colorOf = new Map(
+      edges.map((edge) => [
+        edge.id,
+        paint
+          ? `${byId.get(edge.from)?.kind ?? ""}>${byId.get(edge.to)?.kind ?? ""}`
+          : edgeKindStyle(edge.kind).color,
+      ]),
+    );
     const weightOf = (a: string, b: string): number => (colorOf.get(a) === colorOf.get(b) ? 0.25 : 1);
+
+    // A lane that cuts through a node is not a valid candidate. Only fall back
+    // to those when every lane is blocked.
+    const laneOptions = new Map<string, number[]>();
+    for (const edge of edges) {
+      const all = [...(candidates.get(edge.id)?.keys() ?? [])];
+      const blockers = obstacles
+        .filter((item) => item.id !== edge.from && item.id !== edge.to)
+        .map((item) => item.rect);
+      const clean = all.filter((lane) => {
+        const route = candidates.get(edge.id)?.get(lane);
+        return !!route && !routeCrosses(route.points, blockers, 2);
+      });
+      laneOptions.set(edge.id, clean.length ? clean : all);
+    }
 
     const accepted: { id: string; points: Point[] }[] = [];
     for (const edge of edges) {
-      let chosen = 0;
-      for (const lane of this.bundleOf.has(edge.id) ? [0] : LANES) {
+      const options = laneOptions.get(edge.id) ?? [];
+      let chosen = options[0] ?? 0;
+      for (const lane of options) {
         const route = candidates.get(edge.id)?.get(lane);
         if (!route) continue;
         const clash = accepted.some((item) => {
@@ -735,7 +1015,7 @@ class Viewer implements ViewerHandle {
       let improved = false;
       for (const edge of edges) {
         const previous = lanes.get(edge.id) ?? 0;
-        for (const lane of LANES) {
+        for (const lane of laneOptions.get(edge.id) ?? []) {
           if (lane === previous || !candidates.get(edge.id)?.has(lane)) continue;
           lanes.set(edge.id, lane);
           const trialScore = totalOverlap();
@@ -755,6 +1035,51 @@ class Viewer implements ViewerHandle {
       if (route) routes.set(edge.id, route);
     }
     return routes;
+  }
+
+  /**
+   * Orthogonal routes for every edge. Lanes shift the trunk/stub of an edge so
+   * no two edges draw on the same line; leftover conflicts are repaired by
+   * re-laning the earlier edge while the total overlap keeps dropping.
+   */
+  private buildOrthogonalRoutes(
+    nodeObstacles: { id: string; rect: Rect }[],
+    soft: Rect[],
+  ): Map<string, OrthogonalRoute> {
+    if (!this.viewDoc) return new Map();
+    this.computeBundles(nodeObstacles);
+    const edges = this.viewDoc.edges;
+    const ctx = {
+      byId: this.nodeMap(),
+      pairs: indexPairs(this.viewDoc),
+      fans: this.fans,
+      obstacles: nodeObstacles,
+      soft,
+      anchors: this.forcedAnchors,
+      trunks: this.trunks,
+    };
+    const buildCandidates = (): Map<string, Map<number, OrthogonalRoute>> => {
+      const candidates = new Map<string, Map<number, OrthogonalRoute>>();
+      for (const edge of edges) {
+        const perLane = new Map<number, OrthogonalRoute>();
+        // Bundled edges share one trunk, so they must stay on the base lane.
+        const lanes = this.bundleOf.has(edge.id) ? [0] : ORTHO_LANES;
+        for (const lane of lanes) {
+          const route = orthogonalRoute(edge, ctx, lane);
+          if (route) perLane.set(lane, route);
+        }
+        candidates.set(edge.id, perLane);
+      }
+      return candidates;
+    };
+
+    // The first pass chooses sides exactly as the router always did, skipping
+    // lanes that would cut through a node. Ports are then spread only on the
+    // sides that pass actually used, and the second pass re-lanes the pinned
+    // endpoints, so slots never force a worse detour.
+    const baseline = this.selectRoutes(edges, buildCandidates(), ctx.byId, false, nodeObstacles);
+    this.computePorts(baseline);
+    return this.selectRoutes(edges, buildCandidates(), ctx.byId, true, nodeObstacles);
   }
 
   private collectObstacles(): {
@@ -862,6 +1187,8 @@ class Viewer implements ViewerHandle {
     if (!this.doc || !this.viewDoc) return;
     this.computeFans();
     const { labels: obstacles, routes: routeObstacles, soft } = this.collectObstacles();
+    const nodes = this.nodeMap();
+    this.renderEdgeDefs(nodes);
 
     const orthogonal = this.routeStyle === "orthogonal";
     const geos = new Map<string, EdgeGeometry>();
@@ -872,7 +1199,7 @@ class Viewer implements ViewerHandle {
       for (const [id, route] of routes) routePaths.set(id, pathMetrics(route.points));
     } else {
       for (const edge of this.viewDoc.edges) {
-        const geo = this.edgeGeometryOf(edge);
+        const geo = this.edgeGeometryOf(edge, routeObstacles);
         if (geo) geos.set(edge.id, geo);
       }
     }
@@ -880,24 +1207,32 @@ class Viewer implements ViewerHandle {
     const orthHops = routes ? computePolylineHops(this.viewDoc.edges, routes) : null;
     const foreign = this.foreignMarks(routePaths);
 
+    let paintIndex = 0;
     for (const edge of this.viewDoc.edges) {
       const path = routePaths.get(edge.id);
       const geo = geos.get(edge.id);
       if (orthogonal ? !path : !geo) continue;
       const style = edgeKindStyle(edge.kind);
       const dash = edge.dash === null ? style.dash ?? "" : edge.dash ? "6 4" : "";
+      const detour = geo?.detour;
       const d = orthogonal
         ? polylinePath(path!.points, orthHops?.get(edge.id))
-        : edgePath(geo!, hops!.get(edge.id));
+        : detour
+          ? polylinePath(detour)
+          : edgePath(geo!, hops!.get(edge.id));
+      const start = orthogonal ? path!.points[0]! : geo!.p1;
+      const end = orthogonal ? path!.points[path!.points.length - 1]! : geo!.p2;
+      const paint = this.edgePaint(edge, start, end, nodes, paintIndex++);
+      const arrowKind = nodes.get(edge.to)?.kind ?? "ext";
 
       const group = el("g", { class: "bml-edge", "data-id": edge.id });
       const hit = el("path", { d, class: "bml-edge-hit" }, group);
       const line = el("path", {
         d,
         class: "bml-edge-line",
-        stroke: style.color,
+        stroke: paint,
         "stroke-dasharray": dash || "none",
-        "marker-end": `url(#bml-arrow-${edge.kind})`,
+        "marker-end": `url(#bml-arrow-to-${arrowKind})`,
       }, group);
       this.edgeLayer.appendChild(group);
 
@@ -906,8 +1241,17 @@ class Viewer implements ViewerHandle {
       const font = `500 10.5px ${getComputedStyle(this.root).fontFamily}`;
       const shown = truncate(labelText, font, 260);
       const width = shown ? textWidth(shown, font) : 0;
-      const placed = path
-        ? placeLabelOnPath(path, width, 17, obstacles, this.placedLabels, this.bundleLabelRange(path, edge.id), foreign.get(edge.id))
+      const labelPath = path ?? (detour ? pathMetrics(detour) : undefined);
+      const placed = labelPath
+        ? placeLabelOnPath(
+            labelPath,
+            width,
+            17,
+            obstacles,
+            this.placedLabels,
+            path ? this.bundleLabelRange(path, edge.id) : undefined,
+            foreign.get(edge.id),
+          )
         : placeLabel(geo!, width, 17, obstacles, this.placedLabels);
       this.placedLabels.push(placed.rect);
       (edge as EdgeDecl & { __labelT?: number; __labelOff?: number }).__labelT = placed.t;
@@ -1049,6 +1393,13 @@ class Viewer implements ViewerHandle {
       if (event.button !== 0) return;
       const target = event.target as Element;
       if (target.closest(".bml-node") || target.closest(".bml-edge")) return;
+      // Shift+drag on the canvas draws a selection rectangle; plain drag still pans.
+      if (event.shiftKey && this.viewDoc && !this.options.readOnly) {
+        event.preventDefault();
+        this.selectEdge(null);
+        this.startMarquee(event);
+        return;
+      }
       this.selectNode(null);
       this.selectEdge(null);
       pan = { sx: event.clientX, sy: event.clientY, vx: this.view.x, vy: this.view.y };
@@ -1081,6 +1432,61 @@ class Viewer implements ViewerHandle {
     window.addEventListener("keydown", this.onKeyDown);
   }
 
+  /**
+   * A Shift+drag rectangle on empty canvas. It is additive to the current
+   * selection, and every node it touches lights up live while dragging.
+   */
+  private startMarquee(event: PointerEvent): void {
+    const rect = this.svg.getBoundingClientRect();
+    const origin = { x: event.clientX, y: event.clientY };
+    const base = new Set(this.selectedNodes);
+    let shape: SVGRectElement | null = null;
+    let moved = false;
+
+    const onMove = (move: PointerEvent) => {
+      if (!moved && Math.abs(move.clientX - origin.x) < 3 && Math.abs(move.clientY - origin.y) < 3) return;
+      moved = true;
+      const left = Math.min(origin.x, move.clientX) - rect.left;
+      const top = Math.min(origin.y, move.clientY) - rect.top;
+      const width = Math.abs(move.clientX - origin.x);
+      const height = Math.abs(move.clientY - origin.y);
+      if (!shape) shape = el("rect", { class: "bml-marquee", rx: 3 }, this.svg);
+      shape.setAttribute("x", String(left));
+      shape.setAttribute("y", String(top));
+      shape.setAttribute("width", String(width));
+      shape.setAttribute("height", String(height));
+
+      const a = this.toWorld(origin.x, origin.y);
+      const b = this.toWorld(move.clientX, move.clientY);
+      const bounds = {
+        x: Math.min(a.x, b.x),
+        y: Math.min(a.y, b.y),
+        w: Math.abs(b.x - a.x),
+        h: Math.abs(b.y - a.y),
+      };
+      const hits = (this.viewDoc?.nodes ?? [])
+        .filter((node) => node.at)
+        .filter((node) => {
+          const box = boxOf(node);
+          return box.x < bounds.x + bounds.w && box.x + box.w > bounds.x &&
+            box.y < bounds.y + bounds.h && box.y + box.h > bounds.y;
+        })
+        .map((node) => node.id);
+      this.previewSelection(new Set([...base, ...hits]));
+    };
+
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      shape?.remove();
+      if (!moved) return;
+      this.finishMarquee();
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
   private onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === "Escape") {
       if (this.layersOpen) this.toggleLayers(false);
@@ -1090,6 +1496,18 @@ class Viewer implements ViewerHandle {
     if ((event.metaKey || event.ctrlKey) && event.key === "0") {
       event.preventDefault();
       this.fit();
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      const ids = this.viewDoc?.nodes.map((node) => node.id) ?? [];
+      if (!ids.length) return;
+      event.preventDefault();
+      this.selectedNodes = new Set(ids);
+      this.selectedNode = null;
+      this.selectedEdge = null;
+      this.applySelection();
+      this.closeInspector();
     }
   };
 
@@ -1116,13 +1534,30 @@ class Viewer implements ViewerHandle {
     const affected = this.viewDoc?.edges.filter(
       (e) => this.selectedNodes.has(e.from) || this.selectedNodes.has(e.to),
     ) ?? [];
+    // Positions and neighbour boxes are fixed for the whole gesture, so every
+    // move re-uses them instead of re-measuring the already dragged nodes.
+    const movingBoxes = moving.map((n) => boxOf(n));
+    const movingIds = new Set(moving.map((n) => n.id));
+    const targets = (this.viewDoc?.nodes ?? [])
+      .filter((n) => n.at && !movingIds.has(n.id))
+      .map((n) => boxOf(n));
+    const snapping = this.options.snap !== false;
     let moved = false;
+    this.clearGuides();
     for (const n of moving) this.nodeEls.get(n.id)?.classList.add("bml-dragging");
 
     const onMove = (e: PointerEvent) => {
       const p = this.toWorld(e.clientX, e.clientY);
-      const dx = Math.round(p.x - start.x);
-      const dy = Math.round(p.y - start.y);
+      let dx = Math.round(p.x - start.x);
+      let dy = Math.round(p.y - start.y);
+      let guides: AlignmentGuide[] = [];
+      if (snapping && !e.altKey && (dx || dy)) {
+        const snapped = snapAlignment(movingBoxes, targets, dx, dy, SNAP_RADIUS / this.view.k);
+        dx = snapped.dx;
+        dy = snapped.dy;
+        guides = snapped.guides;
+      }
+      this.drawGuides(guides);
       if (!dx && !dy) return;
       for (const n of moving) {
         const origin = origins.get(n.id)!;
@@ -1146,6 +1581,7 @@ class Viewer implements ViewerHandle {
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      this.clearGuides();
       for (const n of moving) this.nodeEls.get(n.id)?.classList.remove("bml-dragging");
       if (!moved) return;
       this.suppressClick = true;
@@ -1155,6 +1591,26 @@ class Viewer implements ViewerHandle {
 
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+  }
+
+  /** Draw the alignment rules for the current snapped drag; one line per axis. */
+  private drawGuides(guides: AlignmentGuide[]): void {
+    this.guideLayer.replaceChildren();
+    for (const guide of guides) {
+      const vertical = guide.axis === "x";
+      el("line", {
+        x1: vertical ? guide.at : guide.from,
+        y1: vertical ? guide.from : guide.at,
+        x2: vertical ? guide.at : guide.to,
+        y2: vertical ? guide.to : guide.at,
+        "vector-effect": "non-scaling-stroke",
+        class: "bml-guide",
+      }, this.guideLayer);
+    }
+  }
+
+  private clearGuides(): void {
+    this.guideLayer.replaceChildren();
   }
 
   private startBendDrag(event: PointerEvent, edge: EdgeDecl): void {
@@ -1205,9 +1661,10 @@ class Viewer implements ViewerHandle {
       }
       return;
     }
+    const routeObstacles = this.collectObstacles().routes;
     const geos = new Map<string, EdgeGeometry>();
     for (const edge of this.viewDoc.edges) {
-      const geo = this.edgeGeometryOf(edge);
+      const geo = this.edgeGeometryOf(edge, routeObstacles);
       if (geo) geos.set(edge.id, geo);
     }
     const hops = computeHops(this.viewDoc.edges, geos);
@@ -1218,6 +1675,7 @@ class Viewer implements ViewerHandle {
       const d = edgePath(geo, hops.get(edge.id));
       els.line.setAttribute("d", d);
       els.hit.setAttribute("d", d);
+      if (geo.detour) this.placeEdgeLabel(edge, pathMetrics(geo.detour));
     }
   }
 
@@ -1246,11 +1704,15 @@ class Viewer implements ViewerHandle {
 
   private refreshEdge(edge: EdgeDecl): void {
     const els = this.edgeEls.get(edge.id);
-    const geo = this.edgeGeometryOf(edge);
+    const geo = this.edgeGeometryOf(edge, this.collectObstacles().routes);
     if (!els || !geo) return;
-    const d = pathOf(geo);
+    const d = edgePath(geo);
     els.line.setAttribute("d", d);
     els.hit.setAttribute("d", d);
+    if (geo.detour) {
+      this.placeEdgeLabel(edge, pathMetrics(geo.detour));
+      return;
+    }
     const family = getComputedStyle(this.root).fontFamily;
     const font = `500 10.5px ${family}`;
     const text = truncate(edge.label ?? edge.title ?? "", font, 260);
@@ -1369,11 +1831,67 @@ class Viewer implements ViewerHandle {
     }
     this.applyFocus();
     this.refreshBendHandle();
+    this.updateAlignBar();
+  }
+
+  /** Visible nodes in the current selection; hidden ones cannot be aligned. */
+  private selectedVisibleNodes(): NodeDecl[] {
+    return this.viewDoc?.nodes.filter((node) => node.at && this.selectedNodes.has(node.id)) ?? [];
+  }
+
+  private updateAlignBar(): void {
+    const selected = this.selectedVisibleNodes();
+    const open = !this.options.readOnly && selected.length >= 2;
+    this.alignBar.classList.toggle("bml-open", open);
+    if (!open) return;
+    const count = this.alignBar.querySelector(".bml-align-count");
+    if (count) count.textContent = `${selected.length} 个节点`;
+    for (const button of this.alignBar.querySelectorAll<HTMLButtonElement>("button[data-bml-align]")) {
+      const distribute = button.dataset.bmlAlign?.startsWith("dist") ?? false;
+      button.disabled = distribute && selected.length < 3;
+    }
+  }
+
+  private applyAlign(action: string): void {
+    if (this.options.readOnly) return;
+    const nodes = this.selectedVisibleNodes();
+    if (nodes.length < 2) return;
+    const items = nodes.map((node) => ({ id: node.id, rect: boxOf(node) }));
+    let next: Map<string, Point>;
+    if (action === "align-x") next = alignBoxes(items, "x");
+    else if (action === "align-y") next = alignBoxes(items, "y");
+    else if (action === "dist-x" && items.length >= 3) next = distributeBoxes(items, "x");
+    else if (action === "dist-y" && items.length >= 3) next = distributeBoxes(items, "y");
+    else return;
+    if (next.size) this.commit({ nodes: next });
+  }
+
+  /** Live selection while a marquee is dragged; no inspector changes per move. */
+  private previewSelection(ids: Set<string>): void {
+    this.selectedNodes = new Set(ids);
+    this.selectedEdge = null;
+    this.selectedNode = ids.size === 1 ? [...ids][0]! : null;
+    this.applySelection();
+  }
+
+  private finishMarquee(): void {
+    const ids = this.selectedNodes;
+    if (ids.size === 1) {
+      this.selectedNode = [...ids][0]!;
+      this.applySelection();
+      this.openNodeInspector(this.selectedNode);
+      return;
+    }
+    this.selectedNode = null;
+    this.applySelection();
+    this.closeInspector();
   }
 
   /** Dim everything that is not on the hovered/selected node. */
   private applyFocus(): void {
-    const focus = this.selectedNode ?? this.hoveredNode;
+    // A multi-selection is itself the focus; dimming unrelated nodes would hide
+    // the very boxes the user is about to align.
+    const focus = this.selectedNodes.size > 1 ? null : this.selectedNode ?? this.hoveredNode;
     const edges = this.viewDoc ? relatedEdges(this.viewDoc, focus) : new Set<string>();
     const nodes = this.viewDoc ? relatedNodes(this.viewDoc, focus) : new Set<string>();
     this.root.classList.toggle("bml-focusing", Boolean(focus));
@@ -1392,8 +1910,9 @@ class Viewer implements ViewerHandle {
     if (this.routeStyle === "orthogonal" || !this.selectedEdge || !this.doc) return;
     const edge = this.doc.edges.find((e) => e.id === this.selectedEdge);
     if (!edge) return;
-    const geo = this.edgeGeometryOf(edge);
-    if (!geo) return;
+    const geo = this.edgeGeometryOf(edge, this.collectObstacles().routes);
+    // A detour is auto-routed; there is no quadratic handle to drag.
+    if (!geo || geo.detour) return;
     el("path", {
       d: `M ${geo.mid.x} ${geo.mid.y} L ${geo.control.x} ${geo.control.y}`,
       class: "bml-bend-line",
@@ -1691,6 +2210,7 @@ class Viewer implements ViewerHandle {
   setReadOnly(readOnly: boolean): void {
     this.options.readOnly = readOnly;
     this.root.classList.toggle("bml-readonly", readOnly);
+    this.updateAlignBar();
   }
 
   toSVG(): string {
@@ -1700,7 +2220,7 @@ class Viewer implements ViewerHandle {
     clone.querySelector(".bml-ui")?.remove();
     clone.querySelector(".bml-groups > rect[fill^='url']")?.remove();
     // 交互件与临时态不属于图本身
-    clone.querySelectorAll(".bml-group-toggle, .bml-bend-handle, .bml-bend-line, .bml-edge-hit").forEach((el) => el.remove());
+    clone.querySelectorAll(".bml-group-toggle, .bml-bend-handle, .bml-bend-line, .bml-edge-hit, .bml-guides, .bml-marquee").forEach((el) => el.remove());
     clone.querySelectorAll(".bml-selected, .bml-dragging, .bml-related, .bml-focus-node").forEach((el) => {
       el.classList.remove("bml-selected", "bml-dragging", "bml-related", "bml-focus-node");
     });
@@ -1837,6 +2357,18 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+/** Mix a hex color toward white; used for the source end of an edge gradient. */
+function lightenHex(hex: string, amount: number): string {
+  const match = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!match) return hex;
+  const value = parseInt(match[1]!, 16);
+  const mix = (channel: number) => Math.round(channel + (255 - channel) * clamp(amount, 0, 1));
+  const r = mix((value >> 16) & 255);
+  const g = mix((value >> 8) & 255);
+  const b = mix(value & 255);
+  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+}
+
 /* ------------------------------------------------------------ wire hops */
 
 const HOP_RADIUS = 9;
@@ -1907,7 +2439,8 @@ function computeHops(edges: EdgeDecl[], geos: Map<string, EdgeGeometry>): Map<st
   const samples = new Map<string, EdgeSamples>();
   for (const edge of edges) {
     const geo = geos.get(edge.id);
-    if (geo) samples.set(edge.id, sampleEdge(geo));
+    // Detour edges are polylines; hop positions are computed for quadratics.
+    if (geo && !geo.detour) samples.set(edge.id, sampleEdge(geo));
   }
   const hops = new Map<string, number[]>();
   for (let i = 0; i < edges.length; i++) {
@@ -1943,6 +2476,7 @@ function computeHops(edges: EdgeDecl[], geos: Map<string, EdgeGeometry>): Map<st
 
 /** Edge path with a small arc where this (top) edge crosses another one. */
 function edgePath(geo: EdgeGeometry, hops?: number[]): string {
+  if (geo.detour?.length) return polylinePath(geo.detour);
   if (!hops?.length) return pathOf(geo);
   const usable: number[] = [];
   for (const t of [...hops].sort((a, b) => a - b)) {

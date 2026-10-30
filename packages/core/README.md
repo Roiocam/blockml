@@ -36,6 +36,7 @@ const text = serialize(document); // 规范化：缩进、属性顺序、数字�
 | 解析 / 词法 | `parse`、`tokenize` |
 | 回写 | `serialize` |
 | 算法布局 | `layoutDocument`、`applyLayout`、`LAYOUT_ALGORITHMS` |
+| 几何 / 走线 | `orthogonalRoute`、`planSidePorts`、`edgeGeometry`、`routeCrosses`、`boxOf`（两种风格都绕开非端点节点） |
 | 可见性 | `resolveVisibility`、`visibleNodes`、`visibleEdges`、`visibleGroups` |
 | 类型 | `BlockDocument`、`NodeDecl`、`EdgeDecl`、`GroupDecl`、`Diagnostic` 等 |
 

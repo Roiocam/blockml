@@ -55,3 +55,36 @@ describe("applyLayout", () => {
     expect(reparsed.nodes.find((n) => n.id === "b")?.at).toEqual({ x: 2, y: 2 });
   });
 });
+
+const inline = `node a "at: 1, 2" { at: 10, 20 }
+node b "B" { kind: db }
+edge a -> b "x" { kind: sql }
+`;
+
+describe("applyLayout on one-line blocks", () => {
+  it("replaces an inline at instead of appending a stray line", () => {
+    const document = parse(inline).document;
+    const next = applyLayout(inline, document, { nodes: new Map([["a", { x: 100, y: 200 }]]) });
+    expect(next).toContain('node a "at: 1, 2" { at: 100, 200 }');
+    const reparsed = parse(next);
+    expect(reparsed.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(reparsed.document.nodes.find((n) => n.id === "a")?.at).toEqual({ x: 100, y: 200 });
+  });
+
+  it("adds an inline at when the block has no position yet", () => {
+    const document = parse(inline).document;
+    const next = applyLayout(inline, document, { nodes: new Map([["b", { x: 5, y: 6 }]]) });
+    expect(next).toContain('node b "B" { kind: db, at: 5, 6 }');
+    expect(parse(next).document.nodes.find((n) => n.id === "b")?.at).toEqual({ x: 5, y: 6 });
+  });
+
+  it("replaces an inline via", () => {
+    const document = parse(inline).document;
+    const edge = document.edges[0]!;
+    const next = applyLayout(inline, document, { edges: new Map([[edge.id, { x: -30, y: 12 }]]) });
+    expect(next).toContain('edge a -> b "x" { kind: sql, via: -30, 12 }');
+    const reparsed = parse(next);
+    expect(reparsed.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(reparsed.document.edges[0]?.via).toEqual({ x: -30, y: 12 });
+  });
+});
