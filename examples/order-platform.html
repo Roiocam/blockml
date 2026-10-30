@@ -237,6 +237,7 @@
   <div id="blockml-mount"></div>
 </div>
 <script id="blockml-source" type="application/json">"// 示例：一个虚构的电商订单平台\n// 用来演示分层、多种 kind、并行边与可选依赖；所有系统名、域名、路径均为虚构\n\ndiagram {\n  title: \"订单平台 · 架构示例\"\n  subtitle: \"diagram-as-code · 拖动节点或选中连线后拖中点\"\n}\n\ngroup access \"接入层\" {\n  color: #f59e0b\n}\n\ngroup core \"核心服务\" {\n  color: #4f46e5\n}\n\ngroup data \"数据面\" {\n  color: #10b981\n}\n\ngroup partner \"外部合作方\" {\n  color: #8b5cf6\n}\n\nnode storefront \"web-storefront\" {\n  at: 80, 80\n  group: access\n  kind: ui\n  tech: \"React SPA · /shop\"\n  note: \"面向买家的页面，只调用 Gateway，不直连任何后端服务。\"\n  src: \"docs/frontend.md:12\"\n}\n\nnode gateway \"api-gateway\" {\n  at: 80, 198\n  group: access\n  kind: service\n  tech: \"Spring Cloud Gateway · 8080\"\n  note: \"唯一对外入口，负责鉴权、限流与请求转发。\"\n  src: \"docs/services/gateway.md:8-24\"\n}\n\nnode console \"ops-console\" {\n  at: 80, 316\n  group: access\n  kind: ui\n  tech: \"内部控制台 · /ops\"\n  note: \"运营与客服使用，走同一网关但独立路由前缀。\"\n}\n\nnode order \"order-service\" {\n  at: 390, 80\n  group: core\n  kind: service\n  tech: \"Go 1.22 · 8081\"\n  note: \"\"\"\n订单生命周期：创建、支付、取消、退款。\n所有状态变更写 PostgreSQL，并投递一条领域事件给异步侧。\"\"\"\n  src: \"docs/services/order.md:1-40\"\n}\n\nnode inventory \"inventory-service\" {\n  at: 390, 198\n  group: core\n  kind: service\n  tech: \"Go 1.22 · 8082\"\n  note: \"库存预留与释放；用 Redis 做热点 SKU 的预扣计数。\"\n  src: \"docs/services/inventory.md:5-33\"\n}\n\nnode payment \"payment-service\" {\n  at: 390, 316\n  group: core\n  kind: service\n  tech: \"Go 1.22 · 8083\"\n  note: \"对接支付渠道；不落卡号，只保存渠道侧的 payment intent 引用。\"\n  src: \"docs/services/payment.md:3-21\"\n}\n\nnode worker \"event-worker\" {\n  at: 390, 434\n  group: core\n  kind: service\n  tech: \"Go 1.22 · 后台消费\"\n  note: \"消费订单事件，做通知、对账与埋点，失败进重试队列。\"\n}\n\nnode analytics \"analytics-service\" {\n  at: 390, 552\n  group: core\n  kind: service\n  tech: \"Python 3.12 · 只读\"\n  note: \"只读副本查询，生成日报与漏斗指标。\"\n}\n\nnode pg \"PostgreSQL\" {\n  at: 700, 80\n  group: data\n  kind: db\n  tech: \"orders · 主从\"\n  note: \"订单与库存的权威数据；analytics 走只读副本。\"\n  src: \"docs/db/orders.md:4-18\"\n}\n\nnode redis \"Redis\" {\n  at: 700, 198\n  group: data\n  kind: cache\n  tech: \"库存预扣 · 会话\"\n  note: \"缓存与短期计数，可丢；不承载权威状态。\"\n}\n\nnode stripe \"Stripe\" {\n  at: 1010, 80\n  group: partner\n  kind: ext\n  tech: \"支付渠道 · HTTPS\"\n  note: \"外部支付服务，webhook 回调到 gateway 的 /hooks/stripe。\"\n  src: \"docs/integrations/stripe.md:2-9\"\n}\n\nnode mailer \"SendGrid\" {\n  at: 1010, 198\n  group: partner\n  kind: ext\n  tech: \"邮件投递 · HTTPS\"\n  note: \"事务邮件；失败只降级为站内信，不阻塞下单。\"\n}\n\nedge storefront -> gateway \"REST\" {\n  kind: rest\n}\n\nedge console -> gateway \"REST\" {\n  kind: rest\n}\n\nedge gateway -> order \"/orders\" {\n  kind: rest\n  src: \"docs/services/gateway.md:31\"\n}\n\nedge gateway -> inventory \"/stock\" {\n  kind: rest\n}\n\nedge order -> inventory \"gRPC 预占\" {\n  kind: rpc\n}\n\nedge order -> payment \"gRPC 扣款\" {\n  kind: rpc\n}\n\nedge order -> pg \"orders\" {\n  kind: sql\n}\n\nedge order -> redis \"预扣\" {\n  kind: sql\n}\n\nedge inventory -> pg \"stock\" {\n  kind: sql\n}\n\nedge inventory -> redis \"热点\" {\n  kind: sql\n}\n\nedge payment -> stripe \"PaymentIntent\" {\n  kind: rest\n  via: 0, -50\n}\n\nedge payment -> pg \"payment_ref\" {\n  kind: sql\n  via: 70, 0\n}\n\nedge order -> worker \"领域事件\" {\n  kind: sse\n}\n\nedge worker -> mailer \"HTTPS 发信\" {\n  kind: rest\n}\n\nedge analytics -> pg \"只读副本\" {\n  kind: sql\n}\n\nedge worker -> analytics \"指标上报\" {\n  kind: opt\n}\n"</script>
+
 <script>"use strict";
 var BlockML = (() => {
   var __defProp = Object.defineProperty;
@@ -4784,12 +4785,17 @@ ${darkRules}`;
   function jsonForScript(value) {
     return JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
   }
+  function downloadName(title) {
+    const slug = title.replace(/[^\p{L}\p{N}._-]+/gu, "-").replace(/^-+|-+$/g, "").toLowerCase();
+    return `${slug || "blockml"}.blockml`;
+  }
   function renderStandaloneHTML(options) {
     const title = options.title ?? "BlockML";
     const theme = options.theme ?? "light";
     const readOnly = options.readOnly ?? false;
     const script = options.viewerScript.replace(/<\/script/gi, "<\\/script");
     const sourceJson = jsonForScript(options.source);
+    const visibilityJson = options.visibility ? jsonForScript(options.visibility) : null;
     return `<!doctype html>
 <html lang="zh-CN" data-bml-theme="${theme}">
 <head>
@@ -4855,6 +4861,7 @@ ${options.viewerCss}
   <div id="blockml-mount"></div>
 </div>
 <script id="blockml-source" type="application/json">${sourceJson}<\/script>
+${visibilityJson ? `<script id="blockml-visibility" type="application/json">${visibilityJson}<\/script>` : ""}
 <script>${script}<\/script>
 <script>
 (function(){
@@ -4864,6 +4871,13 @@ ${options.viewerCss}
     theme: "${theme}",
     readOnly: ${readOnly}
   });
+  var initialEl = document.getElementById("blockml-visibility");
+  if (initialEl) {
+    var initial = JSON.parse(initialEl.textContent);
+    handle.setHiddenNodes(initial.hiddenNodes);
+    handle.setHiddenGroups(initial.hiddenGroups);
+    handle.setCollapsedGroups(initial.collapsedGroups);
+  }
   // Expose the handle for debugging and for embedding pages that want to script it.
   window.blockmlViewer = handle;
   window.__blockmlGetSource = function(){ return handle.getSource(); };
@@ -4876,7 +4890,7 @@ ${options.viewerCss}
       var blob = new Blob([handle.getSource()], {type: "text/plain;charset=utf-8"});
       var a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = ${jsonForScript(title.replace(/[^\w.-]+/g, "-").toLowerCase() + ".blockml")};
+      a.download = ${jsonForScript(downloadName(title))};
       a.click();
       setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
     }
@@ -4909,6 +4923,13 @@ ${options.viewerCss}
     theme: "light",
     readOnly: false
   });
+  var initialEl = document.getElementById("blockml-visibility");
+  if (initialEl) {
+    var initial = JSON.parse(initialEl.textContent);
+    handle.setHiddenNodes(initial.hiddenNodes);
+    handle.setHiddenGroups(initial.hiddenGroups);
+    handle.setCollapsedGroups(initial.collapsedGroups);
+  }
   // Expose the handle for debugging and for embedding pages that want to script it.
   window.blockmlViewer = handle;
   window.__blockmlGetSource = function(){ return handle.getSource(); };
@@ -4921,7 +4942,7 @@ ${options.viewerCss}
       var blob = new Blob([handle.getSource()], {type: "text/plain;charset=utf-8"});
       var a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "-.blockml";
+      a.download = "订单平台-架构示例.blockml";
       a.click();
       setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
     }

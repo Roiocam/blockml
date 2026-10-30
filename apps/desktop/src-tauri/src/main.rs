@@ -76,6 +76,7 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
     let open_item = MenuItem::with_id(app, "open", "打开…", true, Some("CmdOrCtrl+O"))?;
     let save_item = MenuItem::with_id(app, "save", "保存", true, Some("CmdOrCtrl+S"))?;
     let save_as_item = MenuItem::with_id(app, "save-as", "另存为…", true, Some("CmdOrCtrl+Shift+S"))?;
+    let export_html = MenuItem::with_id(app, "export-html", "导出 HTML…", true, None::<&str>)?;
     let export_svg = MenuItem::with_id(app, "export-svg", "导出 SVG…", true, None::<&str>)?;
     let export_png = MenuItem::with_id(app, "export-png", "导出 PNG…", true, None::<&str>)?;
     let fit_item = MenuItem::with_id(app, "fit", "适应窗口", true, Some("CmdOrCtrl+0"))?;
@@ -89,6 +90,7 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
             &save_item,
             &save_as_item,
             &PredefinedMenuItem::separator(app)?,
+            &export_html,
             &export_svg,
             &export_png,
             &PredefinedMenuItem::separator(app)?,
