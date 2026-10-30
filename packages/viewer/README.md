@@ -1,6 +1,7 @@
 # @block-ml/viewer
 
 BlockML 交互画布：渲染、拖拽（回写源码）、图层开关、导出 SVG，以及把整张图内联成可双击的单文件 HTML。
+渲染质量（共享端口、法线出线、标签避让、避障与跳弧）由这一层统一保证，不依赖文档里的样式键。
 
 `@block-ml/cli` 的 `blockml render` 和 BlockML 桌面端用的就是这一份实现。
 
@@ -18,6 +19,8 @@ import { mount } from "@block-ml/viewer";
 const handle = mount(document.getElementById("canvas")!, {
   source: text,                 // .blockml 源码
   theme: "light",               // light | dark
+  mode: "presentation",         // 嵌入编辑器时可用 editing
+  route: "orthogonal",          // 可选：curve（默认）| orthogonal
   onSourceChange: (next) => save(next), // 拖动后回写
 });
 
@@ -25,8 +28,10 @@ handle.fit();
 const svg = handle.toSVG();
 ```
 
-`mount()` 返回的 `ViewerHandle` 还提供 `zoomTo`、`layout`、`toggleLayers`、
-`setHiddenNodes`、`setCollapsedGroups`、`showAll`、`getVisibility` 等方法。
+`viewer` 默认 `editing` 以保持嵌入编辑器行为；单文件 HTML 与 CLI 交付默认 `presentation`，
+只保留选择、详情、缩放与平移，顶部可切到编辑态。`mount()` 返回的 `ViewerHandle` 还提供
+`setMode` / `getMode`、`zoomTo`、`layout`、`toggleLayers`、`setHiddenNodes`、
+`setCollapsedGroups`、`showAll`、`getVisibility` 等方法。
 
 ## 用法（普通 HTML）
 
@@ -61,7 +66,7 @@ const html = renderStandaloneHTML({
 });
 ```
 
-也可以直接用命令行：`blockml render your.blockml -o your.html`。
+也可以直接用命令行：`blockml render your.blockml -o your.html`（默认演示态，`--route` 选择走线预设，`--readonly` 隐藏编辑切换）。
 
 ## 相关包
 

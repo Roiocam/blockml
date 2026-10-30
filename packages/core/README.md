@@ -2,8 +2,8 @@
 
 BlockML 的解析、校验、序列化、布局与可见性计算。纯 TypeScript，无运行时依赖。
 
-[BlockML](https://github.com/Roiocam/blockml) 是 diagram-as-code 语言：语义和布局写在同一个 `.blockml`
-文件里——写完是图，拖完还是同一份文件。
+[BlockML](https://github.com/Roiocam/blockml) 是 diagram-as-code 语言：作者只写语义，默认布局与走线由平台负责；
+编辑器拖动后的坐标回写到同一个 `.blockml` 文件。
 
 ## 安装
 
@@ -35,10 +35,12 @@ const text = serialize(document); // 规范化：缩进、属性顺序、数字�
 | --- | --- |
 | 解析 / 词法 | `parse`、`tokenize` |
 | 回写 | `serialize` |
-| 算法布局 | `layoutDocument`、`applyLayout`、`LAYOUT_ALGORITHMS` |
-| 几何 / 走线 | `orthogonalRoute`、`planSidePorts`、`edgeGeometry`、`routeCrosses`、`boxOf`（两种风格都绕开非端点节点） |
+| 布局 | `defaultLayout`（分层默认 + 固定坐标覆盖）、`layoutDocument`、`applyLayout`、`LAYOUT_ALGORITHMS` |
+| 几何 / 走线 | `planCurveSides`、`planPorts` / `planSidePorts`（共享侧端口）、`edgeGeometry`、`orthogonalRoute`、`placeLabelOnPath`、`routeCrosses`、`boxOf` |
 | 可见性 | `resolveVisibility`、`visibleNodes`、`visibleEdges`、`visibleGroups` |
 | 类型 | `BlockDocument`、`NodeDecl`、`EdgeDecl`、`GroupDecl`、`Diagnostic` 等 |
+
+两种走线共用同一套端口、法线出线、标签贴合与节点避让规则。
 
 ## 相关包
 

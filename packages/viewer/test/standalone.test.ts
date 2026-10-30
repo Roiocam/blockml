@@ -52,6 +52,30 @@ describe("renderStandaloneHTML", () => {
     expect(html).toContain('"blockml.blockml"');
   });
 
+  it("opens as a presentation without editing chrome", () => {
+    const html = renderStandaloneHTML(base());
+    expect(html).toContain('data-mode="presentation"');
+    expect(html).toContain('mode: "presentation"');
+    expect(html).toContain('data-act="mode"');
+    expect(html).toContain("setMode");
+  });
+
+  it("honours an editing preset", () => {
+    const html = renderStandaloneHTML(base({ mode: "editing" }));
+    expect(html).toContain('data-mode="editing"');
+    expect(html).toContain('mode: "editing"');
+  });
+
+  it("embeds the route preset", () => {
+    const html = renderStandaloneHTML(base({ route: "orthogonal" }));
+    expect(html).toContain('route: "orthogonal"');
+  });
+
+  it("hides the mode toggle for read-only exports", () => {
+    const html = renderStandaloneHTML(base({ readOnly: true }));
+    expect(html).not.toContain('<button data-act="mode"');
+  });
+
   it("keeps hostile source and title text inside their own script blocks", () => {
     const html = renderStandaloneHTML(
       base({

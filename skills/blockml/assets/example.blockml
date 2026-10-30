@@ -3,24 +3,16 @@
 
 diagram {
   title: "订单平台 · 架构示例"
-  subtitle: "diagram-as-code · 拖动节点或选中连线后拖中点"
+  subtitle: "diagram-as-code · 布局与走线由平台负责，HTML 默认演示态"
 }
 
-group access "接入层" {
-  color: #f59e0b
-}
+group access "接入层"
 
-group core "核心服务" {
-  color: #4f46e5
-}
+group core "核心服务"
 
-group data "数据面" {
-  color: #10b981
-}
+group data "数据面"
 
-group partner "外部合作方" {
-  color: #8b5cf6
-}
+group partner "外部合作方"
 
 node storefront "web-storefront" {
   group: access

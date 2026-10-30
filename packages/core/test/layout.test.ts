@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { layoutDocument, parse, relatedEdges, relatedNodes } from "../src/index.js";
+import { defaultLayout, layoutDocument, parse, relatedEdges, relatedNodes } from "../src/index.js";
 import type { LayoutAlgorithm } from "../src/index.js";
 
 const source = `group access "接入" { color: #f59e0b }
@@ -107,6 +107,46 @@ describe("layoutDocument", () => {
     const cyclic = parse(`node a "A"\nnode b "B"\nedge a -> b\nedge b -> a`).document;
     const result = layoutDocument(cyclic, "layered");
     expect(result.size).toBe(2);
+  });
+});
+
+describe("defaultLayout", () => {
+  it("uses the layered algorithm when no node has a position", () => {
+    const result = defaultLayout(document);
+    expect(result.get("web")!.x).toBe(result.get("gw")!.x);
+    expect(result.get("gw")!.x).toBeLessThan(result.get("order")!.x);
+    expect(result.get("order")!.x).toBeLessThan(result.get("pg")!.x);
+    expect(result.get("web")!.x).toBeGreaterThanOrEqual(80);
+  });
+
+  it("keeps hand-written coordinates and only fills the gaps", () => {
+    const doc = parse(`group core "核心" { }
+node fixed "fixed" { group: core, at: 5000, 5000 }
+node loose "loose" { group: core }
+node other "other" { group: core }
+edge loose -> other "x"
+`).document;
+    const result = defaultLayout(doc);
+    expect(result.get("fixed")).toEqual({ x: 5000, y: 5000 });
+    expect(result.get("loose")).toBeDefined();
+    expect(result.get("other")).toBeDefined();
+  });
+
+  it("is deterministic", () => {
+    expect([...defaultLayout(document).entries()]).toEqual([...defaultLayout(document).entries()]);
+  });
+
+  it("keeps every other node still after one node is dragged", () => {
+    const doc = parse(source).document;
+    const before = defaultLayout(doc);
+    const moved = before.get("gw")!;
+    doc.nodes.find((node) => node.id === "gw")!.at = { x: moved.x + 120, y: moved.y + 40 };
+    const after = defaultLayout(doc);
+    expect(after.get("gw")).toEqual({ x: moved.x + 120, y: moved.y + 40 });
+    for (const node of doc.nodes) {
+      if (node.id === "gw") continue;
+      expect(after.get(node.id)).toEqual(before.get(node.id));
+    }
   });
 });
 

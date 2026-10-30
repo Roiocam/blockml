@@ -293,6 +293,21 @@ export function layoutDocument(
   }
 }
 
+/**
+ * Positions for a document that has not been laid out yet. Everything starts on
+ * the layered algorithm, so first render already reads as an architecture map
+ * instead of a declaration-order grid. Hand-written coordinates win, but the
+ * rest stay on the same layered skeleton — dragging one node must never shuffle
+ * every other node into a different grid.
+ */
+export function defaultLayout(document: BlockDocument, options?: LayoutOptions): Map<string, Point> {
+  const positions = layoutDocument(document, "layered", options);
+  for (const node of document.nodes) {
+    if (node.at) positions.set(node.id, node.at);
+  }
+  return positions;
+}
+
 /** Nodes reachable from or into `id`, used for hover/selection highlighting. */
 export function relatedEdges(document: BlockDocument, id: string | null): Set<string> {
   const set = new Set<string>();

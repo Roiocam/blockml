@@ -31,6 +31,9 @@ export const VIEWER_CSS = `
 }
 .bml-svg{flex:1;width:100%;height:100%;display:block;touch-action:none;cursor:default}
 .bml-root.bml-readonly .bml-node{cursor:default}
+.bml-root.bml-presentation .bml-node{cursor:default}
+.bml-root.bml-presentation .bml-group-toggle,
+.bml-root.bml-presentation .bml-align-bar{display:none!important}
 .bml-grid-dot{fill:var(--bml-grid)}
 .bml-group-box{fill-opacity:.06;stroke-opacity:.3;stroke-width:1.2}
 .bml-group-box.bml-collapsed{fill-opacity:.1;stroke-dasharray:5 4}

@@ -39,15 +39,37 @@ export function anchorPoint(node: NodeDecl, towards: Point, options: BoxOptions 
   return { x: box.cx + dx * s, y: box.cy + dy * s };
 }
 
+export interface LineEdgeSegment {
+  type: "line";
+  a: Point;
+  b: Point;
+}
+
+export interface CubicEdgeSegment {
+  type: "cubic";
+  a: Point;
+  c1: Point;
+  c2: Point;
+  b: Point;
+}
+
+export type EdgeSegment = LineEdgeSegment | CubicEdgeSegment;
+
 export interface EdgeGeometry {
   p1: Point;
   p2: Point;
+  /**
+   * A point the curve passes through: the `via` apex for a plain curve, or the
+   * shared branch point for a bundled edge. This is also the bend handle.
+   */
   control: Point;
   mid: Point;
   offset: number;
+  /** Straight normal stubs plus cubic runs, in drawing order. */
+  segments?: EdgeSegment[];
   /**
-   * Curve mode fallback: when no single quadratic can clear the node boxes,
-   * the edge follows this polyline (rendered with rounded corners) instead.
+   * Fallback when no smooth curve can clear the node boxes: a rounded
+   * orthogonal polyline with the same normal exits.
    */
   detour?: Point[];
 }
@@ -60,29 +82,47 @@ export function bezierAt(p1: Point, c: Point, p2: Point, t: number): Point {
   };
 }
 
+export function cubicAt(segment: CubicEdgeSegment, t: number): Point {
+  const mt = 1 - t;
+  const a = mt * mt * mt;
+  const b = 3 * mt * mt * t;
+  const c = 3 * mt * t * t;
+  const d = t * t * t;
+  return {
+    x: a * segment.a.x + b * segment.c1.x + c * segment.c2.x + d * segment.b.x,
+    y: a * segment.a.y + b * segment.c1.y + c * segment.c2.y + d * segment.b.y,
+  };
+}
+
 export interface GeometryContext {
   byId: Map<string, NodeDecl>;
   /** Edge groups keyed by the unordered node pair, used to spread parallel edges. */
   pairs: Map<string, EdgeDecl[]>;
   box?: BoxOptions;
-  /**
-   * Per-edge anchor offsets (px) along the node border. Edges that share a node
-   * fan out instead of stacking on the same anchor point.
-   */
-  fans?: Map<string, { from?: number; to?: number }>;
-  /** Node boxes (with ids) that orthogonal routes should route around. */
+  /** Node boxes (with ids) that routes should avoid. */
   obstacles?: { id: string; rect: Rect }[];
   /** Areas routes prefer to avoid (group headers) but may cross when cheaper. */
   soft?: Rect[];
-  /** Endpoints pinned to a chosen side and point (edge bundles and side ports). */
+  /** Endpoints pinned to a chosen side and point (side ports or bundles). */
   anchors?: Map<string, { from?: ForcedAnchor; to?: ForcedAnchor }>;
-  /** Fixed trunk coordinate so bundled edges share one line into the node. */
+  /** Fixed trunk coordinate so bundled orthogonal edges share one line into the node. */
   trunks?: Map<string, { x?: number; y?: number }>;
+  /**
+   * Fixed branch point for a bundled curve, pinned to the shared end. Every
+   * edge in the bundle runs along the same normal to this point before
+   * branching, which makes that run read as one trunk.
+   */
+  junctions?: Map<string, CurveJunction>;
 }
 
 export interface ForcedAnchor {
   point: Point;
   side: EdgeSide;
+}
+
+/** A bundle's shared branch point, anchored to the end that the bundle shares. */
+export interface CurveJunction extends ForcedAnchor {
+  end: "from" | "to";
 }
 
 const ANCHOR_MARGIN = 14;
@@ -96,22 +136,6 @@ export function sideRange(box: Rect, side: EdgeSide): { min: number; max: number
     return { min: box.y + ANCHOR_MARGIN, max: box.y + box.h - ANCHOR_MARGIN };
   }
   return { min: box.x + 18, max: box.x + box.w - 18 };
-}
-
-/** Slide an anchor along the side of the box it sits on, keeping it on the border. */
-export function slideAnchor(point: Point, box: Rect, amount: number): Point {
-  const onVerticalSide =
-    Math.abs(point.x - box.x) < 0.75 || Math.abs(point.x - (box.x + box.w)) < 0.75;
-  if (onVerticalSide) {
-    return {
-      x: point.x,
-      y: clampNumber(point.y + amount, box.y + ANCHOR_MARGIN, box.y + box.h - ANCHOR_MARGIN),
-    };
-  }
-  return {
-    x: clampNumber(point.x + amount, box.x + 18, box.x + box.w - 18),
-    y: point.y,
-  };
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -134,6 +158,249 @@ export function indexPairs(document: BlockDocument): Map<string, EdgeDecl[]> {
   return map;
 }
 
+function distance(a: Point, b: Point): number {
+  return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+function addScaled(point: Point, direction: Point, amount: number): Point {
+  return { x: point.x + direction.x * amount, y: point.y + direction.y * amount };
+}
+
+function unitVector(from: Point, to: Point): Point {
+  const length = distance(from, to) || 1;
+  return { x: (to.x - from.x) / length, y: (to.y - from.y) / length };
+}
+
+/** A border point that pins an edge end, including the side it leaves from. */
+export function sideNormal(side: EdgeSide): Point {
+  const out = SIDE_OUT[side];
+  return { x: out.x, y: out.y };
+}
+
+function lineSegment(a: Point, b: Point): LineEdgeSegment {
+  return { type: "line", a, b };
+}
+
+function cubicSegment(a: Point, c1: Point, c2: Point, b: Point): CubicEdgeSegment {
+  return { type: "cubic", a, c1, c2, b };
+}
+
+const CURVE_STUB_MIN = 8;
+const CURVE_STUB_MAX = 24;
+const CURVE_SAMPLES = 48;
+const CURVE_SAMPLES_MAX = 160;
+const CURVE_PAD = 3;
+
+/** Leave the border straight for 8–24px before the line starts to bend. */
+function stubLength(p1: Point, p2: Point): number {
+  return clampNumber(distance(p1, p2) * 0.18, CURVE_STUB_MIN, CURVE_STUB_MAX);
+}
+
+function controlDistance(length: number): number {
+  return Math.max(2, Math.min(80, length * 0.42));
+}
+
+/**
+ * A curve leaves each port along its border normal, runs a short straight stub,
+ * then follows two cubic halves through `control`. The control point is on the
+ * path, so `via` is a true midpoint offset rather than a hidden handle.
+ */
+function curveSegments(
+  p1: Point,
+  side1: EdgeSide,
+  p2: Point,
+  side2: EdgeSide,
+  control: Point,
+  junction?: CurveJunction,
+): EdgeSegment[] {
+  const n1 = SIDE_OUT[side1];
+  const n2 = SIDE_OUT[side2];
+  const stub = stubLength(p1, p2);
+  const a1 = addScaled(p1, n1, stub);
+  const a2 = addScaled(p2, n2, stub);
+
+  if (junction) {
+    // The port-to-junction run is the bundle's shared trunk. The branch keeps
+    // the trunk normal at the junction and bends into the other port normal.
+    if (junction.end === "from") {
+      const branch = cubicSegment(
+        junction.point,
+        addScaled(junction.point, n1, controlDistance(distance(junction.point, a2))),
+        addScaled(a2, n2, controlDistance(distance(junction.point, a2))),
+        a2,
+      );
+      return [lineSegment(p1, junction.point), branch, lineSegment(a2, p2)];
+    }
+    const branch = cubicSegment(
+      a1,
+      addScaled(a1, n1, controlDistance(distance(a1, junction.point))),
+      addScaled(junction.point, n2, controlDistance(distance(a1, junction.point))),
+      junction.point,
+    );
+    return [lineSegment(p1, a1), branch, lineSegment(junction.point, p2)];
+  }
+
+  const axis = unitVector(a1, a2);
+  const firstLength = distance(a1, control);
+  const secondLength = distance(control, a2);
+  return [
+    lineSegment(p1, a1),
+    cubicSegment(
+      a1,
+      addScaled(a1, n1, controlDistance(firstLength)),
+      addScaled(control, axis, -controlDistance(firstLength)),
+      control,
+    ),
+    cubicSegment(
+      control,
+      addScaled(control, axis, controlDistance(secondLength)),
+      addScaled(a2, n2, controlDistance(secondLength)),
+      a2,
+    ),
+    lineSegment(a2, p2),
+  ];
+}
+
+function segmentLength(segment: EdgeSegment): number {
+  if (segment.type === "line") return distance(segment.a, segment.b);
+  let total = 0;
+  let previous = segment.a;
+  for (let i = 1; i <= 16; i++) {
+    const point = cubicAt(segment, i / 16);
+    total += distance(previous, point);
+    previous = point;
+  }
+  return total;
+}
+
+function dedupe(points: Point[]): Point[] {
+  const out: Point[] = [];
+  for (const point of points) {
+    const last = out[out.length - 1];
+    if (last && Math.abs(last.x - point.x) < 0.01 && Math.abs(last.y - point.y) < 0.01) continue;
+    out.push(point);
+  }
+  return out;
+}
+
+/** Evenly sample a route for hit testing, labels and hop detection. */
+export function sampleEdgePath(geo: EdgeGeometry, steps = 48): Point[] {
+  if (geo.detour?.length) {
+    const points = geo.detour;
+    if (points.length < 2) return points.slice();
+    const lengths: number[] = [];
+    let total = 0;
+    for (let i = 1; i < points.length; i++) {
+      const length = distance(points[i - 1]!, points[i]!);
+      lengths.push(length);
+      total += length;
+    }
+    const out: Point[] = [points[0]!];
+    for (let i = 1; i < points.length; i++) {
+      const count = Math.max(1, Math.round((steps * lengths[i - 1]!) / Math.max(total, 1)));
+      for (let k = 1; k <= count; k++) {
+        const t = k / count;
+        const a = points[i - 1]!;
+        const b = points[i]!;
+        out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+      }
+    }
+    return dedupe(out);
+  }
+  if (!geo.segments?.length) return [geo.p1, geo.p2];
+  const lengths = geo.segments.map(segmentLength);
+  const total = lengths.reduce((sum, length) => sum + length, 0);
+  const out: Point[] = [geo.segments[0]!.a];
+  geo.segments.forEach((segment, index) => {
+    const count = Math.max(1, Math.round((steps * lengths[index]!) / Math.max(total, 1)));
+    for (let k = 1; k <= count; k++) {
+      const t = k / count;
+      if (segment.type === "line") {
+        out.push({
+          x: segment.a.x + (segment.b.x - segment.a.x) * t,
+          y: segment.a.y + (segment.b.y - segment.a.y) * t,
+        });
+      } else {
+        out.push(cubicAt(segment, t));
+      }
+    }
+  });
+  return dedupe(out);
+}
+
+function curveSampleCount(p1: Point, p2: Point): number {
+  const span = distance(p1, p2);
+  return Math.max(CURVE_SAMPLES, Math.min(CURVE_SAMPLES_MAX, Math.ceil(span / 4)));
+}
+
+/** Number of sampled curve positions that sit inside a node box. */
+function curveCrossings(geo: EdgeGeometry, obstacles: Rect[]): number {
+  let hits = 0;
+  for (const point of sampleEdgePath(geo, curveSampleCount(geo.p1, geo.p2))) {
+    for (const rect of obstacles) {
+      if (
+        point.x > rect.x - CURVE_PAD &&
+        point.x < rect.x + rect.w + CURVE_PAD &&
+        point.y > rect.y - CURVE_PAD &&
+        point.y < rect.y + rect.h + CURVE_PAD
+      ) {
+        hits++;
+        break;
+      }
+    }
+  }
+  return hits;
+}
+
+function buildCurve(
+  p1: Point,
+  side1: EdgeSide,
+  p2: Point,
+  side2: EdgeSide,
+  control: Point,
+  spread: number,
+  junction?: CurveJunction,
+): EdgeGeometry {
+  const segments = curveSegments(p1, side1, p2, side2, control, junction);
+  return {
+    p1,
+    p2,
+    control,
+    mid: polylineMidpoint(sampleEdgePath({ p1, p2, control, mid: control, offset: spread, segments }, 40)),
+    offset: spread,
+    segments,
+  };
+}
+
+function detourGeometry(
+  edge: EdgeDecl,
+  ctx: GeometryContext,
+  obstacles: Rect[],
+  control: Point,
+  spread: number,
+): EdgeGeometry | null {
+  let best: { points: Point[]; crossings: number } | null = null;
+  for (const lane of [0, 1, -1, 2, -2, 3, -3, 4, -4]) {
+    const route = orthogonalRoute(edge, ctx, lane);
+    if (!route) continue;
+    const crossings = segmentCrossings(route.points, obstacles);
+    if (!best || crossings < best.crossings) {
+      best = { points: route.points, crossings };
+    }
+    if (crossings === 0) break;
+  }
+  if (!best) return null;
+  const points = best.points;
+  return {
+    p1: points[0]!,
+    p2: points[points.length - 1]!,
+    control,
+    mid: polylineMidpoint(points),
+    offset: spread,
+    detour: points,
+  };
+}
+
 export function edgeGeometry(edge: EdgeDecl, ctx: GeometryContext): EdgeGeometry | null {
   const options = ctx.box ?? DEFAULT_BOX;
   const from = ctx.byId.get(edge.from);
@@ -142,11 +409,26 @@ export function edgeGeometry(edge: EdgeDecl, ctx: GeometryContext): EdgeGeometry
 
   const fromBox = boxOf(from, options);
   const toBox = boxOf(to, options);
-  const fan = ctx.fans?.get(edge.id);
-  let p1 = anchorPoint(from, { x: toBox.cx, y: toBox.cy }, options);
-  let p2 = anchorPoint(to, { x: fromBox.cx, y: fromBox.cy }, options);
-  if (fan?.from) p1 = slideAnchor(p1, fromBox, fan.from);
-  if (fan?.to) p2 = slideAnchor(p2, toBox, fan.to);
+  const forcedFrom = ctx.anchors?.get(edge.id)?.from;
+  const forcedTo = ctx.anchors?.get(edge.id)?.to;
+  let p1: Point;
+  let p2: Point;
+  let side1: EdgeSide;
+  let side2: EdgeSide;
+  if (forcedFrom) {
+    p1 = forcedFrom.point;
+    side1 = forcedFrom.side;
+  } else {
+    p1 = anchorPoint(from, { x: toBox.cx, y: toBox.cy }, options);
+    side1 = edgeSide(p1, fromBox);
+  }
+  if (forcedTo) {
+    p2 = forcedTo.point;
+    side2 = forcedTo.side;
+  } else {
+    p2 = anchorPoint(to, { x: fromBox.cx, y: fromBox.cy }, options);
+    side2 = edgeSide(p2, toBox);
+  }
 
   const mx = (p1.x + p2.x) / 2;
   const my = (p1.y + p2.y) / 2;
@@ -167,230 +449,50 @@ export function edgeGeometry(edge: EdgeDecl, ctx: GeometryContext): EdgeGeometry
     x: mx + via.x + px * spread,
     y: my + via.y + py * spread,
   };
+  const junction = ctx.junctions?.get(edge.id);
+  const control = junction?.point ?? base;
   const obstacles = (ctx.obstacles ?? [])
     .filter((item) => item.id !== edge.from && item.id !== edge.to)
     .map((item) => item.rect);
-  let control = base;
-  if (obstacles.length) {
-    control = clearCurve(p1, base, p2, obstacles, false);
-    if (!curveClears(p1, control, p2, obstacles)) {
-      const moved = reanchorCurve(fromBox, toBox, p1, p2, via, spread, obstacles);
-      if (moved) {
-        p1 = moved.p1;
-        p2 = moved.p2;
-        control = moved.control;
-      } else {
-        // Dense layouts can leave no quadratic corridor at all; fall back to a
-        // rounded orthogonal detour rather than drawing through a node.
-        const detour = orthogonalRoute(edge, ctx, 0);
-        if (detour && !routeCrosses(detour.points, obstacles, 2)) {
-          p1 = detour.points[0]!;
-          p2 = detour.points[detour.points.length - 1]!;
-          return {
-            p1,
-            p2,
-            control: base,
-            mid: polylineMidpoint(detour.points),
-            offset: spread,
-            detour: detour.points,
-          };
-        }
-        // Last resort: a wide bow from the natural anchors.
-        control = clearCurve(p1, base, p2, obstacles);
+
+  const first = buildCurve(p1, side1, p2, side2, control, spread, junction);
+  if (!obstacles.length || curveCrossings(first, obstacles) === 0) return first;
+
+  // A shared bundle trunk must not move per edge; either it clears or the
+  // bundle falls back to a normal port-to-port curve.
+  if (!junction) {
+    const candidates: { point: Point; distance: number }[] = [];
+    for (const along of [0, 70, -70, 140, -140]) {
+      for (const perp of [0, 40, -40, 80, -80, 120, -120, 160, -160, 200, -200, 260, -260, 320, -320]) {
+        if (!along && !perp) continue;
+        candidates.push({
+          point: {
+            x: base.x + px * perp + (vx / len) * along,
+            y: base.y + py * perp + (vy / len) * along,
+          },
+          distance: Math.hypot(perp, along),
+        });
       }
     }
-  }
-
-  return {
-    p1,
-    p2,
-    control,
-    mid: bezierAt(p1, control, p2, 0.5),
-    offset: spread,
-  };
-}
-
-const CURVE_SAMPLES = 48;
-const CURVE_SAMPLES_MAX = 160;
-const CURVE_PAD = 3;
-
-/**
- * Sample densely enough to catch a shallow graze, without paying the full
- * maximum on short edges.
- */
-function curveSampleCount(p1: Point, p2: Point): number {
-  const span = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-  return Math.max(CURVE_SAMPLES, Math.min(CURVE_SAMPLES_MAX, Math.ceil(span / 4)));
-}
-
-/** Number of sampled curve positions that sit inside a node box. */
-function curveCrossings(p1: Point, control: Point, p2: Point, obstacles: Rect[]): number {
-  let hits = 0;
-  const samples = curveSampleCount(p1, p2);
-  for (let i = 1; i < samples; i++) {
-    const point = bezierAt(p1, control, p2, i / samples);
-    for (const rect of obstacles) {
-      // Expand the box: the curve must keep a visible gap, not just avoid the
-      // interior. A line grazing a rounded corner still reads as covered.
-      if (
-        point.x > rect.x - CURVE_PAD &&
-        point.x < rect.x + rect.w + CURVE_PAD &&
-        point.y > rect.y - CURVE_PAD &&
-        point.y < rect.y + rect.h + CURVE_PAD
-      ) {
-        hits++;
-        break;
-      }
+    candidates.sort((a, b) => a.distance - b.distance);
+    for (const candidate of candidates) {
+      const geo = buildCurve(p1, side1, p2, side2, candidate.point, spread);
+      if (curveCrossings(geo, obstacles) === 0) return geo;
     }
-  }
-  return hits;
-}
-
-/**
- * Bow the control point away from the straight run until the curve clears every
- * node. Tries the smallest offsets first, so a free line keeps its via exactly.
- */
-function clearCurve(p1: Point, base: Point, p2: Point, obstacles: Rect[], ring = true): Point {
-  let best = base;
-  let bestHits = curveCrossings(p1, base, p2, obstacles);
-  if (bestHits === 0) return base;
-
-  const vx = p2.x - p1.x;
-  const vy = p2.y - p1.y;
-  const len = Math.hypot(vx, vy) || 1;
-  const nx = -vy / len;
-  const ny = vx / len;
-  const ux = vx / len;
-  const uy = vy / len;
-  const candidates: { point: Point; distance: number }[] = [];
-  for (const along of [0, 70, -70, 140, -140]) {
-    for (const perp of [0, 40, -40, 80, -80, 120, -120, 160, -160, 200, -200, 260, -260, 320, -320]) {
-      if (!along && !perp) continue;
-      const point = {
-        x: base.x + nx * perp + ux * along,
-        y: base.y + ny * perp + uy * along,
-      };
-      candidates.push({ point, distance: Math.hypot(perp, along) });
-    }
-  }
-  candidates.sort((a, b) => a.distance - b.distance);
-  for (const candidate of candidates) {
-    const hits = curveCrossings(p1, candidate.point, p2, obstacles);
-    if (hits === 0) return candidate.point;
-    if (hits < bestHits) {
-      best = candidate.point;
-      bestHits = hits;
-    }
-  }
-
-  if (ring) {
-    // A node sitting squarely between both endpoints needs a hairpin the fine
-    // grid cannot express. Sweep coarse rings around the base control instead
-    // of settling for the least-bad line through a box.
     for (const radius of [400, 480, 560, 640, 720, 800]) {
       for (const angle of [0, 45, -45, 90, -90, 135, -135, 180]) {
         const rad = (angle * Math.PI) / 180;
-        const perp = radius * Math.cos(rad);
-        const along = radius * Math.sin(rad);
         const point = {
-          x: base.x + nx * perp + ux * along,
-          y: base.y + ny * perp + uy * along,
+          x: base.x + px * radius * Math.cos(rad) + (vx / len) * radius * Math.sin(rad),
+          y: base.y + py * radius * Math.cos(rad) + (vy / len) * radius * Math.sin(rad),
         };
-        if (curveCrossings(p1, point, p2, obstacles) === 0) return point;
+        const geo = buildCurve(p1, side1, p2, side2, point, spread);
+        if (curveCrossings(geo, obstacles) === 0) return geo;
       }
     }
   }
-  return best;
-}
 
-/** True when the curve never enters a node box. */
-function curveClears(p1: Point, control: Point, p2: Point, obstacles: Rect[]): boolean {
-  return curveCrossings(p1, control, p2, obstacles) === 0;
-}
-
-/** Approximate arc length, used to compare re-anchored curves. */
-function curveLength(p1: Point, control: Point, p2: Point): number {
-  let total = 0;
-  let prev = p1;
-  for (let i = 1; i <= 24; i++) {
-    const point = bezierAt(p1, control, p2, i / 24);
-    total += Math.hypot(point.x - prev.x, point.y - prev.y);
-    prev = point;
-  }
-  return total;
-}
-
-/** The control point must sit on the outward side of the anchor it leaves. */
-function leavesAnchor(control: Point, anchor: Point, side: EdgeSide): boolean {
-  const out = SIDE_OUT[side];
-  return (control.x - anchor.x) * out.x + (control.y - anchor.y) * out.y > 0;
-}
-
-/**
- * When no control point can clear the boxes from the natural anchors, move one
- * or both endpoints to a neighbouring side. The cross-corridor case (a node
- * sitting right between source and target) is the one a single quadratic cannot
- * solve from the natural sides; re-anchoring keeps the line short instead of
- * bowing it around the whole neighbourhood.
- */
-function reanchorCurve(
-  fromBox: NodeBox,
-  toBox: NodeBox,
-  p1: Point,
-  p2: Point,
-  via: Point,
-  spread: number,
-  obstacles: Rect[],
-): { p1: Point; p2: Point; control: Point } | null {
-  const fromSide = edgeSide(p1, fromBox);
-  const toSide = edgeSide(p2, toBox);
-  const alternatives = (box: NodeBox, side: EdgeSide, anchor: Point) =>
-    SIDES.filter((item) => item !== side)
-      .map((item) => ({ side: item, point: sideMidpoint(box, item) }))
-      .sort(
-        (a, b) =>
-          Math.hypot(a.point.x - anchor.x, a.point.y - anchor.y) -
-          Math.hypot(b.point.x - anchor.x, b.point.y - anchor.y),
-      )
-      .slice(0, 2);
-  const fromOptions = alternatives(fromBox, fromSide, p1);
-  const toOptions = alternatives(toBox, toSide, p2);
-
-  type Attempt = { p1: Point; p2: Point; fromSide: EdgeSide; toSide: EdgeSide; changed: number };
-  const attempts: Attempt[] = [];
-  for (const option of fromOptions) {
-    attempts.push({ p1: option.point, p2, fromSide: option.side, toSide, changed: 1 });
-  }
-  for (const option of toOptions) {
-    attempts.push({ p1, p2: option.point, fromSide, toSide: option.side, changed: 1 });
-  }
-  for (const from of fromOptions) {
-    for (const to of toOptions) {
-      attempts.push({ p1: from.point, p2: to.point, fromSide: from.side, toSide: to.side, changed: 2 });
-    }
-  }
-
-  let best: { p1: Point; p2: Point; control: Point; score: number } | null = null;
-  for (const attempt of attempts) {
-    const mx = (attempt.p1.x + attempt.p2.x) / 2;
-    const my = (attempt.p1.y + attempt.p2.y) / 2;
-    const vx = attempt.p2.x - attempt.p1.x;
-    const vy = attempt.p2.y - attempt.p1.y;
-    const len = Math.hypot(vx, vy) || 1;
-    const base = {
-      x: mx + via.x + (-vy / len) * spread,
-      y: my + via.y + (vx / len) * spread,
-    };
-    const control = clearCurve(attempt.p1, base, attempt.p2, obstacles, false);
-    if (!curveClears(attempt.p1, control, attempt.p2, obstacles)) continue;
-    if (!leavesAnchor(control, attempt.p1, attempt.fromSide)) continue;
-    if (!leavesAnchor(control, attempt.p2, attempt.toSide)) continue;
-    const score = curveLength(attempt.p1, control, attempt.p2) + attempt.changed * 80;
-    if (!best || score < best.score) {
-      best = { p1: attempt.p1, p2: attempt.p2, control, score };
-    }
-  }
-  return best ? { p1: best.p1, p2: best.p2, control: best.control } : null;
+  return detourGeometry(edge, ctx, obstacles, control, spread) ?? first;
 }
 
 export function groupBoundingBox(
@@ -487,7 +589,22 @@ export function autoLayout(
 
 export function pathOf(geo: EdgeGeometry): string {
   const f = (n: number) => Number(n.toFixed(2));
-  return `M ${f(geo.p1.x)} ${f(geo.p1.y)} Q ${f(geo.control.x)} ${f(geo.control.y)} ${f(geo.p2.x)} ${f(geo.p2.y)}`;
+  if (geo.detour?.length) {
+    const [first, ...rest] = geo.detour;
+    return `M ${f(first!.x)} ${f(first!.y)}${rest.map((point) => ` L ${f(point.x)} ${f(point.y)}`).join("")}`;
+  }
+  if (!geo.segments?.length) {
+    return `M ${f(geo.p1.x)} ${f(geo.p1.y)} Q ${f(geo.control.x)} ${f(geo.control.y)} ${f(geo.p2.x)} ${f(geo.p2.y)}`;
+  }
+  let d = `M ${f(geo.segments[0]!.a.x)} ${f(geo.segments[0]!.a.y)}`;
+  for (const segment of geo.segments) {
+    if (segment.type === "line") {
+      d += ` L ${f(segment.b.x)} ${f(segment.b.y)}`;
+    } else {
+      d += ` C ${f(segment.c1.x)} ${f(segment.c1.y)} ${f(segment.c2.x)} ${f(segment.c2.y)} ${f(segment.b.x)} ${f(segment.b.y)}`;
+    }
+  }
+  return d;
 }
 
 /* -------------------------------------------------------- orthogonal routing */
@@ -611,6 +728,75 @@ export function planSidePorts(
     side,
     point: sidePoint(box, side, positions[index]!),
   }));
+}
+
+/** A smart-guide line drawn while a drag is snapped into alignment. */
+/** One node border's worth of edges, before ports are assigned. */
+export interface SideUse {
+  box: Rect;
+  side: EdgeSide;
+  ins: { edge: EdgeDecl; desired: number }[];
+  outs: { edge: EdgeDecl; desired: number }[];
+  /** Bundle groups get their own point on the same rail. */
+  bundles: { key: string; desired: number; edges: EdgeDecl[]; end: "from" | "to" }[];
+}
+
+export interface PortAssignment {
+  edgeId: string;
+  end: "from" | "to";
+  side: EdgeSide;
+  point: Point;
+  /** Present when the assignment belongs to a bundle group. */
+  bundle?: string;
+}
+
+/**
+ * The shared port rail for both route styles: one point per inbound group, one
+ * per outbound group, and one per bundle. Edges sharing a group share a point;
+ * a line entering a node can never sit on a line leaving it.
+ */
+export function planPorts(uses: SideUse[], gap = PORT_GAP): PortAssignment[] {
+  const assignments: PortAssignment[] = [];
+  for (const use of uses) {
+    const groups: PortGroup[] = use.bundles.map((bundle) => ({
+      key: bundle.key,
+      desired: bundle.desired,
+    }));
+    const bundles = new Map(use.bundles.map((bundle) => [bundle.key, bundle]));
+    const average = (items: { desired: number }[]) =>
+      items.reduce((sum, item) => sum + item.desired, 0) / Math.max(1, items.length);
+    if (use.ins.length) groups.push({ key: "in", desired: average(use.ins) });
+    if (use.outs.length) groups.push({ key: "out", desired: average(use.outs) });
+    if (!groups.length) continue;
+
+    for (const port of planSidePorts(use.box, use.side, groups, gap)) {
+      const bundle = bundles.get(port.key);
+      if (bundle) {
+        for (const edge of bundle.edges) {
+          assignments.push({
+            edgeId: edge.id,
+            end: bundle.end,
+            side: use.side,
+            point: port.point,
+            bundle: port.key,
+          });
+        }
+        continue;
+      }
+      if (port.key !== "in" && port.key !== "out") continue;
+      const end = port.key === "in" ? "to" : "from";
+      const list = port.key === "in" ? use.ins : use.outs;
+      for (const item of list) {
+        assignments.push({
+          edgeId: item.edge.id,
+          end,
+          side: use.side,
+          point: port.point,
+        });
+      }
+    }
+  }
+  return assignments;
 }
 
 /** A smart-guide line drawn while a drag is snapped into alignment. */
@@ -797,6 +983,135 @@ export function primarySide(box: NodeBox, other: NodeBox): EdgeSide {
   const dy = other.cy - box.cy;
   if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? "right" : "left";
   return dy >= 0 ? "bottom" : "top";
+}
+
+export interface CurveSides {
+  from: EdgeSide;
+  to: EdgeSide;
+}
+
+export interface CurveSideOptions {
+  /** Node boxes to avoid; defaults to every node in the document. */
+  obstacles?: { id: string; rect: Rect }[];
+  /** Areas to avoid when cheap (group headers). */
+  soft?: Rect[];
+  /** Bundle anchors. A bundled end keeps the side chosen by the bundle. */
+  anchors?: Map<string, { from?: ForcedAnchor; to?: ForcedAnchor }>;
+  box?: BoxOptions;
+  /** How far outside the node bounds a direct pair may bow. */
+  margin?: number;
+}
+
+/**
+ * Choose the border each curve end leaves from. The dominant-direction pair is
+ * used whenever it produces a compact curve that clears every node; otherwise
+ * the orthogonal router supplies a side pair that gets around the blockers.
+ * Both cases still share ports per side in `planPorts`, so the result is about
+ * direction, not about creating new attachment points.
+ */
+export function planCurveSides(
+  document: BlockDocument,
+  options: CurveSideOptions = {},
+): Map<string, CurveSides> {
+  const box = options.box ?? DEFAULT_BOX;
+  const result = new Map<string, CurveSides>();
+  const byId = new Map(document.nodes.map((node) => [node.id, node]));
+  const boxes = new Map(document.nodes.map((node) => [node.id, boxOf(node, box)]));
+  const pairs = indexPairs(document);
+  const obstacles = options.obstacles ?? document.nodes.map((node) => ({ id: node.id, rect: boxOf(node, box) }));
+  const soft = options.soft ?? [];
+  const anchors = options.anchors;
+  const margin = options.margin ?? 120;
+  const bounds = obstacles.reduce<Rect | null>((acc, item) => {
+    const r = item.rect;
+    if (!acc) return { ...r };
+    const x = Math.min(acc.x, r.x);
+    const y = Math.min(acc.y, r.y);
+    return {
+      x,
+      y,
+      w: Math.max(acc.x + acc.w, r.x + r.w) - x,
+      h: Math.max(acc.y + acc.h, r.y + r.h) - y,
+    };
+  }, null);
+  const blockers = obstacles.map((item) => item.rect);
+
+  const trial = (edge: EdgeDecl, fromSide: EdgeSide, toSide: EdgeSide): boolean => {
+    const fromBox = boxes.get(edge.from);
+    const toBox = boxes.get(edge.to);
+    if (!fromBox || !toBox) return false;
+    const fromPoint = sidePoint(fromBox, fromSide, sideAlong(fromBox, fromSide, { x: toBox.cx, y: toBox.cy }));
+    const toPoint = sidePoint(toBox, toSide, sideAlong(toBox, toSide, { x: fromBox.cx, y: fromBox.cy }));
+    const geo = edgeGeometry(edge, {
+      byId,
+      pairs,
+      box,
+      obstacles,
+      soft,
+      anchors: new Map([[edge.id, {
+        from: { side: fromSide, point: fromPoint },
+        to: { side: toSide, point: toPoint },
+      }]]),
+    });
+    if (!geo || geo.detour) return false;
+    const points = sampleEdgePath(geo, 96);
+    let pathLength = 0;
+    for (let i = 1; i < points.length; i++) {
+      pathLength += distance(points[i - 1]!, points[i]!);
+    }
+    const direct = distance(fromPoint, toPoint);
+    if (pathLength > Math.max(direct * 2.2, direct + 260)) return false;
+    const own = new Set([edge.from, edge.to]);
+    for (const point of points) {
+      if (
+        bounds &&
+        (point.x < bounds.x - margin || point.x > bounds.x + bounds.w + margin ||
+         point.y < bounds.y - margin || point.y > bounds.y + bounds.h + margin)
+      ) return false;
+      for (let i = 0; i < blockers.length; i++) {
+        if (own.has(obstacles[i]!.id)) continue;
+        const rect = blockers[i]!;
+        if (
+          point.x > rect.x + 1 && point.x < rect.x + rect.w - 1 &&
+          point.y > rect.y + 1 && point.y < rect.y + rect.h - 1
+        ) return false;
+      }
+    }
+    return true;
+  };
+
+  for (const edge of document.edges) {
+    const fromBox = boxes.get(edge.from);
+    const toBox = boxes.get(edge.to);
+    if (!fromBox || !toBox) continue;
+    const forced = anchors?.get(edge.id);
+    const primary: CurveSides = {
+      from: primarySide(fromBox, toBox),
+      to: primarySide(toBox, fromBox),
+    };
+    if (!forced?.from && !forced?.to && trial(edge, primary.from, primary.to)) {
+      result.set(edge.id, primary);
+      continue;
+    }
+    const route = orthogonalRoute(edge, {
+      byId,
+      pairs,
+      box,
+      obstacles,
+      soft,
+      anchors,
+    }, 0);
+    if (!route) {
+      result.set(edge.id, primary);
+      continue;
+    }
+    const last = route.points[route.points.length - 1]!;
+    result.set(edge.id, {
+      from: forced?.from?.side ?? edgeSide(route.points[0]!, fromBox),
+      to: forced?.to?.side ?? edgeSide(last, toBox),
+    });
+  }
+  return result;
 }
 
 function segmentHitsRect(a: Point, b: Point, rect: Rect, pad: number): boolean {

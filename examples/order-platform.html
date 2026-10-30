@@ -15,6 +15,7 @@
     border-bottom:1px solid #e2e8f0;
     backdrop-filter:blur(8px);
   }
+  #blockml-app[data-mode="presentation"] .bml-editing-only{display:none}
   #blockml-bar .grow{flex:1}
   #blockml-bar .name{font-weight:650;color:#0f172a;font-size:12.5px}
   #blockml-bar .badge{font:500 10px/1 ui-monospace,monospace;padding:3px 6px;border-radius:5px;
@@ -71,6 +72,9 @@
 }
 .bml-svg{flex:1;width:100%;height:100%;display:block;touch-action:none;cursor:default}
 .bml-root.bml-readonly .bml-node{cursor:default}
+.bml-root.bml-presentation .bml-node{cursor:default}
+.bml-root.bml-presentation .bml-group-toggle,
+.bml-root.bml-presentation .bml-align-bar{display:none!important}
 .bml-grid-dot{fill:var(--bml-grid)}
 .bml-group-box{fill-opacity:.06;stroke-opacity:.3;stroke-width:1.2}
 .bml-group-box.bml-collapsed{fill-opacity:.1;stroke-dasharray:5 4}
@@ -216,13 +220,14 @@
 </style>
 </head>
 <body>
-<div id="blockml-app">
+<div id="blockml-app" data-mode="presentation">
   <div id="blockml-bar">
     <span class="name">订单平台 · 架构示例</span>
     <span class="badge">.blockml</span>
     <span class="grow"></span>
-    <button data-act="layers" title="显示 / 隐藏分组与节点">图层</button>
-    <select id="blockml-layout" title="重新排列（会覆盖手工坐标）">
+    <button data-act="mode" title="切换编辑 / 预览">编辑</button>
+    <button data-act="layers" class="bml-editing-only" title="显示 / 隐藏分组与节点">图层</button>
+    <select id="blockml-layout" class="bml-editing-only" title="重新排列（会覆盖手工坐标）">
       <option value="">手工布局</option>
       <option value="layered">从左到右</option>
       <option value="pipeline">Pipeline</option>
@@ -236,7 +241,7 @@
   </div>
   <div id="blockml-mount"></div>
 </div>
-<script id="blockml-source" type="application/json">"// 示例：一个虚构的电商订单平台\n// 用来演示分层、多种 kind、并行边与可选依赖；所有系统名、域名、路径均为虚构\n\ndiagram {\n  title: \"订单平台 · 架构示例\"\n  subtitle: \"diagram-as-code · 拖动节点或选中连线后拖中点\"\n}\n\ngroup access \"接入层\" {\n  color: #f59e0b\n}\n\ngroup core \"核心服务\" {\n  color: #4f46e5\n}\n\ngroup data \"数据面\" {\n  color: #10b981\n}\n\ngroup partner \"外部合作方\" {\n  color: #8b5cf6\n}\n\nnode storefront \"web-storefront\" {\n  at: 80, 80\n  group: access\n  kind: ui\n  tech: \"React SPA · /shop\"\n  note: \"面向买家的页面，只调用 Gateway，不直连任何后端服务。\"\n  src: \"docs/frontend.md:12\"\n}\n\nnode gateway \"api-gateway\" {\n  at: 80, 198\n  group: access\n  kind: service\n  tech: \"Spring Cloud Gateway · 8080\"\n  note: \"唯一对外入口，负责鉴权、限流与请求转发。\"\n  src: \"docs/services/gateway.md:8-24\"\n}\n\nnode console \"ops-console\" {\n  at: 80, 316\n  group: access\n  kind: ui\n  tech: \"内部控制台 · /ops\"\n  note: \"运营与客服使用，走同一网关但独立路由前缀。\"\n}\n\nnode order \"order-service\" {\n  at: 390, 80\n  group: core\n  kind: service\n  tech: \"Go 1.22 · 8081\"\n  note: \"\"\"\n订单生命周期：创建、支付、取消、退款。\n所有状态变更写 PostgreSQL，并投递一条领域事件给异步侧。\"\"\"\n  src: \"docs/services/order.md:1-40\"\n}\n\nnode inventory \"inventory-service\" {\n  at: 390, 198\n  group: core\n  kind: service\n  tech: \"Go 1.22 · 8082\"\n  note: \"库存预留与释放；用 Redis 做热点 SKU 的预扣计数。\"\n  src: \"docs/services/inventory.md:5-33\"\n}\n\nnode payment \"payment-service\" {\n  at: 390, 316\n  group: core\n  kind: service\n  tech: \"Go 1.22 · 8083\"\n  note: \"对接支付渠道；不落卡号，只保存渠道侧的 payment intent 引用。\"\n  src: \"docs/services/payment.md:3-21\"\n}\n\nnode worker \"event-worker\" {\n  at: 390, 434\n  group: core\n  kind: service\n  tech: \"Go 1.22 · 后台消费\"\n  note: \"消费订单事件，做通知、对账与埋点，失败进重试队列。\"\n}\n\nnode analytics \"analytics-service\" {\n  at: 390, 552\n  group: core\n  kind: service\n  tech: \"Python 3.12 · 只读\"\n  note: \"只读副本查询，生成日报与漏斗指标。\"\n}\n\nnode pg \"PostgreSQL\" {\n  at: 700, 80\n  group: data\n  kind: db\n  tech: \"orders · 主从\"\n  note: \"订单与库存的权威数据；analytics 走只读副本。\"\n  src: \"docs/db/orders.md:4-18\"\n}\n\nnode redis \"Redis\" {\n  at: 700, 198\n  group: data\n  kind: cache\n  tech: \"库存预扣 · 会话\"\n  note: \"缓存与短期计数，可丢；不承载权威状态。\"\n}\n\nnode stripe \"Stripe\" {\n  at: 1010, 80\n  group: partner\n  kind: ext\n  tech: \"支付渠道 · HTTPS\"\n  note: \"外部支付服务，webhook 回调到 gateway 的 /hooks/stripe。\"\n  src: \"docs/integrations/stripe.md:2-9\"\n}\n\nnode mailer \"SendGrid\" {\n  at: 1010, 198\n  group: partner\n  kind: ext\n  tech: \"邮件投递 · HTTPS\"\n  note: \"事务邮件；失败只降级为站内信，不阻塞下单。\"\n}\n\nedge storefront -> gateway \"REST\" {\n  kind: rest\n}\n\nedge console -> gateway \"REST\" {\n  kind: rest\n}\n\nedge gateway -> order \"/orders\" {\n  kind: rest\n  src: \"docs/services/gateway.md:31\"\n}\n\nedge gateway -> inventory \"/stock\" {\n  kind: rest\n}\n\nedge order -> inventory \"gRPC 预占\" {\n  kind: rpc\n}\n\nedge order -> payment \"gRPC 扣款\" {\n  kind: rpc\n}\n\nedge order -> pg \"orders\" {\n  kind: sql\n}\n\nedge order -> redis \"预扣\" {\n  kind: sql\n}\n\nedge inventory -> pg \"stock\" {\n  kind: sql\n}\n\nedge inventory -> redis \"热点\" {\n  kind: sql\n}\n\nedge payment -> stripe \"PaymentIntent\" {\n  kind: rest\n  via: 0, -50\n}\n\nedge payment -> pg \"payment_ref\" {\n  kind: sql\n  via: 70, 0\n}\n\nedge order -> worker \"领域事件\" {\n  kind: sse\n}\n\nedge worker -> mailer \"HTTPS 发信\" {\n  kind: rest\n}\n\nedge analytics -> pg \"只读副本\" {\n  kind: sql\n}\n\nedge worker -> analytics \"指标上报\" {\n  kind: opt\n}\n"</script>
+<script id="blockml-source" type="application/json">"// 示例：一个虚构的电商订单平台\n// 用来演示分层、多种 kind、并行边与可选依赖；所有系统名、域名、路径均为虚构\n\ndiagram {\n  title: \"订单平台 · 架构示例\"\n  subtitle: \"diagram-as-code · 布局与样式由平台负责，拖完仍是同一份文件\"\n}\n\ngroup access \"接入层\"\n\ngroup core \"核心服务\"\n\ngroup data \"数据面\"\n\ngroup partner \"外部合作方\"\n\nnode storefront \"web-storefront\" {\n  group: access\n  kind: ui\n  tech: \"React SPA · /shop\"\n  note: \"面向买家的页面，只调用 Gateway，不直连任何后端服务。\"\n  src: \"docs/frontend.md:12\"\n}\n\nnode gateway \"api-gateway\" {\n  group: access\n  kind: service\n  tech: \"Spring Cloud Gateway · 8080\"\n  note: \"唯一对外入口，负责鉴权、限流与请求转发。\"\n  src: \"docs/services/gateway.md:8-24\"\n}\n\nnode console \"ops-console\" {\n  group: access\n  kind: ui\n  tech: \"内部控制台 · /ops\"\n  note: \"运营与客服使用，走同一网关但独立路由前缀。\"\n}\n\nnode order \"order-service\" {\n  group: core\n  kind: service\n  tech: \"Go 1.22 · 8081\"\n  note: \"\"\"\n订单生命周期：创建、支付、取消、退款。\n所有状态变更写 PostgreSQL，并投递一条领域事件给异步侧。\"\"\"\n  src: \"docs/services/order.md:1-40\"\n}\n\nnode inventory \"inventory-service\" {\n  group: core\n  kind: service\n  tech: \"Go 1.22 · 8082\"\n  note: \"库存预留与释放；用 Redis 做热点 SKU 的预扣计数。\"\n  src: \"docs/services/inventory.md:5-33\"\n}\n\nnode payment \"payment-service\" {\n  group: core\n  kind: service\n  tech: \"Go 1.22 · 8083\"\n  note: \"对接支付渠道；不落卡号，只保存渠道侧的 payment intent 引用。\"\n  src: \"docs/services/payment.md:3-21\"\n}\n\nnode worker \"event-worker\" {\n  group: core\n  kind: service\n  tech: \"Go 1.22 · 后台消费\"\n  note: \"消费订单事件，做通知、对账与埋点，失败进重试队列。\"\n}\n\nnode analytics \"analytics-service\" {\n  group: core\n  kind: service\n  tech: \"Python 3.12 · 只读\"\n  note: \"只读副本查询，生成日报与漏斗指标。\"\n}\n\nnode pg \"PostgreSQL\" {\n  group: data\n  kind: db\n  tech: \"orders · 主从\"\n  note: \"订单与库存的权威数据；analytics 走只读副本。\"\n  src: \"docs/db/orders.md:4-18\"\n}\n\nnode redis \"Redis\" {\n  group: data\n  kind: cache\n  tech: \"库存预扣 · 会话\"\n  note: \"缓存与短期计数，可丢；不承载权威状态。\"\n}\n\nnode stripe \"Stripe\" {\n  group: partner\n  kind: ext\n  tech: \"支付渠道 · HTTPS\"\n  note: \"外部支付服务，webhook 回调到 gateway 的 /hooks/stripe。\"\n  src: \"docs/integrations/stripe.md:2-9\"\n}\n\nnode mailer \"SendGrid\" {\n  group: partner\n  kind: ext\n  tech: \"邮件投递 · HTTPS\"\n  note: \"事务邮件；失败只降级为站内信，不阻塞下单。\"\n}\n\nedge storefront -> gateway \"REST\" {\n  kind: rest\n}\n\nedge console -> gateway \"REST\" {\n  kind: rest\n}\n\nedge gateway -> order \"/orders\" {\n  kind: rest\n  src: \"docs/services/gateway.md:31\"\n}\n\nedge gateway -> inventory \"/stock\" {\n  kind: rest\n}\n\nedge order -> inventory \"gRPC 预占\" {\n  kind: rpc\n}\n\nedge order -> payment \"gRPC 扣款\" {\n  kind: rpc\n}\n\nedge order -> pg \"orders\" {\n  kind: sql\n}\n\nedge order -> redis \"预扣\" {\n  kind: sql\n}\n\nedge inventory -> pg \"stock\" {\n  kind: sql\n}\n\nedge inventory -> redis \"热点\" {\n  kind: sql\n}\n\nedge payment -> stripe \"PaymentIntent\" {\n  kind: rest\n}\n\nedge payment -> pg \"payment_ref\" {\n  kind: sql\n}\n\nedge order -> worker \"领域事件\" {\n  kind: sse\n}\n\nedge worker -> mailer \"HTTPS 发信\" {\n  kind: rest\n}\n\nedge analytics -> pg \"只读副本\" {\n  kind: sql\n}\n\nedge worker -> analytics \"指标上报\" {\n  kind: opt\n}\n"</script>
 
 <script>"use strict";
 var BlockML = (() => {
@@ -533,6 +538,15 @@ var BlockML = (() => {
   var FALLBACK_NODE_KIND = "ext";
   var DEFAULT_EDGE_KIND = "rest";
   var FALLBACK_EDGE_KIND = "opt";
+  var GROUP_PALETTE = [
+    "#f59e0b",
+    "#4f46e5",
+    "#0ea5e9",
+    "#10b981",
+    "#ec4899",
+    "#8b5cf6",
+    "#64748b"
+  ];
   function nodeKindStyle(kind) {
     return NODE_KINDS[kind] ?? NODE_KINDS[FALLBACK_NODE_KIND];
   }
@@ -1230,11 +1244,15 @@ var BlockML = (() => {
     const s = Math.min(sx, sy);
     return { x: box.cx + dx * s, y: box.cy + dy * s };
   }
-  function bezierAt(p1, c, p2, t) {
+  function cubicAt(segment, t) {
     const mt = 1 - t;
+    const a = mt * mt * mt;
+    const b = 3 * mt * mt * t;
+    const c = 3 * mt * t * t;
+    const d = t * t * t;
     return {
-      x: mt * mt * p1.x + 2 * mt * t * c.x + t * t * p2.x,
-      y: mt * mt * p1.y + 2 * mt * t * c.y + t * t * p2.y
+      x: a * segment.a.x + b * segment.c1.x + c * segment.c2.x + d * segment.b.x,
+      y: a * segment.a.y + b * segment.c1.y + c * segment.c2.y + d * segment.b.y
     };
   }
   var ANCHOR_MARGIN = 14;
@@ -1244,19 +1262,6 @@ var BlockML = (() => {
       return { min: box.y + ANCHOR_MARGIN, max: box.y + box.h - ANCHOR_MARGIN };
     }
     return { min: box.x + 18, max: box.x + box.w - 18 };
-  }
-  function slideAnchor(point, box, amount) {
-    const onVerticalSide = Math.abs(point.x - box.x) < 0.75 || Math.abs(point.x - (box.x + box.w)) < 0.75;
-    if (onVerticalSide) {
-      return {
-        x: point.x,
-        y: clampNumber(point.y + amount, box.y + ANCHOR_MARGIN, box.y + box.h - ANCHOR_MARGIN)
-      };
-    }
-    return {
-      x: clampNumber(point.x + amount, box.x + 18, box.x + box.w - 18),
-      y: point.y
-    };
   }
   function clampNumber(value, min, max) {
     return Math.max(min, Math.min(max, value));
@@ -1274,6 +1279,193 @@ var BlockML = (() => {
     }
     return map;
   }
+  function distance(a, b) {
+    return Math.hypot(b.x - a.x, b.y - a.y);
+  }
+  function addScaled(point, direction, amount) {
+    return { x: point.x + direction.x * amount, y: point.y + direction.y * amount };
+  }
+  function unitVector(from, to) {
+    const length = distance(from, to) || 1;
+    return { x: (to.x - from.x) / length, y: (to.y - from.y) / length };
+  }
+  function sideNormal(side) {
+    const out = SIDE_OUT[side];
+    return { x: out.x, y: out.y };
+  }
+  function lineSegment(a, b) {
+    return { type: "line", a, b };
+  }
+  function cubicSegment(a, c1, c2, b) {
+    return { type: "cubic", a, c1, c2, b };
+  }
+  var CURVE_STUB_MIN = 8;
+  var CURVE_STUB_MAX = 24;
+  var CURVE_SAMPLES = 48;
+  var CURVE_SAMPLES_MAX = 160;
+  var CURVE_PAD = 3;
+  function stubLength(p1, p2) {
+    return clampNumber(distance(p1, p2) * 0.18, CURVE_STUB_MIN, CURVE_STUB_MAX);
+  }
+  function controlDistance(length) {
+    return Math.max(2, Math.min(80, length * 0.42));
+  }
+  function curveSegments(p1, side1, p2, side2, control, junction) {
+    const n1 = SIDE_OUT[side1];
+    const n2 = SIDE_OUT[side2];
+    const stub = stubLength(p1, p2);
+    const a1 = addScaled(p1, n1, stub);
+    const a2 = addScaled(p2, n2, stub);
+    if (junction) {
+      if (junction.end === "from") {
+        const branch2 = cubicSegment(
+          junction.point,
+          addScaled(junction.point, n1, controlDistance(distance(junction.point, a2))),
+          addScaled(a2, n2, controlDistance(distance(junction.point, a2))),
+          a2
+        );
+        return [lineSegment(p1, junction.point), branch2, lineSegment(a2, p2)];
+      }
+      const branch = cubicSegment(
+        a1,
+        addScaled(a1, n1, controlDistance(distance(a1, junction.point))),
+        addScaled(junction.point, n2, controlDistance(distance(a1, junction.point))),
+        junction.point
+      );
+      return [lineSegment(p1, a1), branch, lineSegment(junction.point, p2)];
+    }
+    const axis = unitVector(a1, a2);
+    const firstLength = distance(a1, control);
+    const secondLength = distance(control, a2);
+    return [
+      lineSegment(p1, a1),
+      cubicSegment(
+        a1,
+        addScaled(a1, n1, controlDistance(firstLength)),
+        addScaled(control, axis, -controlDistance(firstLength)),
+        control
+      ),
+      cubicSegment(
+        control,
+        addScaled(control, axis, controlDistance(secondLength)),
+        addScaled(a2, n2, controlDistance(secondLength)),
+        a2
+      ),
+      lineSegment(a2, p2)
+    ];
+  }
+  function segmentLength(segment) {
+    if (segment.type === "line") return distance(segment.a, segment.b);
+    let total = 0;
+    let previous = segment.a;
+    for (let i = 1; i <= 16; i++) {
+      const point = cubicAt(segment, i / 16);
+      total += distance(previous, point);
+      previous = point;
+    }
+    return total;
+  }
+  function dedupe(points) {
+    const out = [];
+    for (const point of points) {
+      const last = out[out.length - 1];
+      if (last && Math.abs(last.x - point.x) < 0.01 && Math.abs(last.y - point.y) < 0.01) continue;
+      out.push(point);
+    }
+    return out;
+  }
+  function sampleEdgePath(geo, steps = 48) {
+    if (geo.detour?.length) {
+      const points = geo.detour;
+      if (points.length < 2) return points.slice();
+      const lengths2 = [];
+      let total2 = 0;
+      for (let i = 1; i < points.length; i++) {
+        const length = distance(points[i - 1], points[i]);
+        lengths2.push(length);
+        total2 += length;
+      }
+      const out2 = [points[0]];
+      for (let i = 1; i < points.length; i++) {
+        const count = Math.max(1, Math.round(steps * lengths2[i - 1] / Math.max(total2, 1)));
+        for (let k = 1; k <= count; k++) {
+          const t = k / count;
+          const a = points[i - 1];
+          const b = points[i];
+          out2.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+        }
+      }
+      return dedupe(out2);
+    }
+    if (!geo.segments?.length) return [geo.p1, geo.p2];
+    const lengths = geo.segments.map(segmentLength);
+    const total = lengths.reduce((sum, length) => sum + length, 0);
+    const out = [geo.segments[0].a];
+    geo.segments.forEach((segment, index) => {
+      const count = Math.max(1, Math.round(steps * lengths[index] / Math.max(total, 1)));
+      for (let k = 1; k <= count; k++) {
+        const t = k / count;
+        if (segment.type === "line") {
+          out.push({
+            x: segment.a.x + (segment.b.x - segment.a.x) * t,
+            y: segment.a.y + (segment.b.y - segment.a.y) * t
+          });
+        } else {
+          out.push(cubicAt(segment, t));
+        }
+      }
+    });
+    return dedupe(out);
+  }
+  function curveSampleCount(p1, p2) {
+    const span = distance(p1, p2);
+    return Math.max(CURVE_SAMPLES, Math.min(CURVE_SAMPLES_MAX, Math.ceil(span / 4)));
+  }
+  function curveCrossings(geo, obstacles) {
+    let hits = 0;
+    for (const point of sampleEdgePath(geo, curveSampleCount(geo.p1, geo.p2))) {
+      for (const rect of obstacles) {
+        if (point.x > rect.x - CURVE_PAD && point.x < rect.x + rect.w + CURVE_PAD && point.y > rect.y - CURVE_PAD && point.y < rect.y + rect.h + CURVE_PAD) {
+          hits++;
+          break;
+        }
+      }
+    }
+    return hits;
+  }
+  function buildCurve(p1, side1, p2, side2, control, spread, junction) {
+    const segments = curveSegments(p1, side1, p2, side2, control, junction);
+    return {
+      p1,
+      p2,
+      control,
+      mid: polylineMidpoint(sampleEdgePath({ p1, p2, control, mid: control, offset: spread, segments }, 40)),
+      offset: spread,
+      segments
+    };
+  }
+  function detourGeometry(edge, ctx, obstacles, control, spread) {
+    let best = null;
+    for (const lane of [0, 1, -1, 2, -2, 3, -3, 4, -4]) {
+      const route = orthogonalRoute(edge, ctx, lane);
+      if (!route) continue;
+      const crossings = segmentCrossings(route.points, obstacles);
+      if (!best || crossings < best.crossings) {
+        best = { points: route.points, crossings };
+      }
+      if (crossings === 0) break;
+    }
+    if (!best) return null;
+    const points = best.points;
+    return {
+      p1: points[0],
+      p2: points[points.length - 1],
+      control,
+      mid: polylineMidpoint(points),
+      offset: spread,
+      detour: points
+    };
+  }
   function edgeGeometry(edge, ctx) {
     const options = ctx.box ?? DEFAULT_BOX;
     const from = ctx.byId.get(edge.from);
@@ -1281,11 +1473,26 @@ var BlockML = (() => {
     if (!from || !to) return null;
     const fromBox = boxOf(from, options);
     const toBox = boxOf(to, options);
-    const fan = ctx.fans?.get(edge.id);
-    let p1 = anchorPoint(from, { x: toBox.cx, y: toBox.cy }, options);
-    let p2 = anchorPoint(to, { x: fromBox.cx, y: fromBox.cy }, options);
-    if (fan?.from) p1 = slideAnchor(p1, fromBox, fan.from);
-    if (fan?.to) p2 = slideAnchor(p2, toBox, fan.to);
+    const forcedFrom = ctx.anchors?.get(edge.id)?.from;
+    const forcedTo = ctx.anchors?.get(edge.id)?.to;
+    let p1;
+    let p2;
+    let side1;
+    let side2;
+    if (forcedFrom) {
+      p1 = forcedFrom.point;
+      side1 = forcedFrom.side;
+    } else {
+      p1 = anchorPoint(from, { x: toBox.cx, y: toBox.cy }, options);
+      side1 = edgeSide(p1, fromBox);
+    }
+    if (forcedTo) {
+      p2 = forcedTo.point;
+      side2 = forcedTo.side;
+    } else {
+      p2 = anchorPoint(to, { x: fromBox.cx, y: fromBox.cy }, options);
+      side2 = edgeSide(p2, toBox);
+    }
     const mx = (p1.x + p2.x) / 2;
     const my = (p1.y + p2.y) / 2;
     const vx = p2.x - p1.x;
@@ -1303,168 +1510,43 @@ var BlockML = (() => {
       x: mx + via.x + px * spread,
       y: my + via.y + py * spread
     };
+    const junction = ctx.junctions?.get(edge.id);
+    const control = junction?.point ?? base;
     const obstacles = (ctx.obstacles ?? []).filter((item) => item.id !== edge.from && item.id !== edge.to).map((item) => item.rect);
-    let control = base;
-    if (obstacles.length) {
-      control = clearCurve(p1, base, p2, obstacles, false);
-      if (!curveClears(p1, control, p2, obstacles)) {
-        const moved = reanchorCurve(fromBox, toBox, p1, p2, via, spread, obstacles);
-        if (moved) {
-          p1 = moved.p1;
-          p2 = moved.p2;
-          control = moved.control;
-        } else {
-          const detour = orthogonalRoute(edge, ctx, 0);
-          if (detour && !routeCrosses(detour.points, obstacles, 2)) {
-            p1 = detour.points[0];
-            p2 = detour.points[detour.points.length - 1];
-            return {
-              p1,
-              p2,
-              control: base,
-              mid: polylineMidpoint(detour.points),
-              offset: spread,
-              detour: detour.points
-            };
-          }
-          control = clearCurve(p1, base, p2, obstacles);
+    const first = buildCurve(p1, side1, p2, side2, control, spread, junction);
+    if (!obstacles.length || curveCrossings(first, obstacles) === 0) return first;
+    if (!junction) {
+      const candidates = [];
+      for (const along of [0, 70, -70, 140, -140]) {
+        for (const perp of [0, 40, -40, 80, -80, 120, -120, 160, -160, 200, -200, 260, -260, 320, -320]) {
+          if (!along && !perp) continue;
+          candidates.push({
+            point: {
+              x: base.x + px * perp + vx / len * along,
+              y: base.y + py * perp + vy / len * along
+            },
+            distance: Math.hypot(perp, along)
+          });
         }
       }
-    }
-    return {
-      p1,
-      p2,
-      control,
-      mid: bezierAt(p1, control, p2, 0.5),
-      offset: spread
-    };
-  }
-  var CURVE_SAMPLES = 48;
-  var CURVE_SAMPLES_MAX = 160;
-  var CURVE_PAD = 3;
-  function curveSampleCount(p1, p2) {
-    const span = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-    return Math.max(CURVE_SAMPLES, Math.min(CURVE_SAMPLES_MAX, Math.ceil(span / 4)));
-  }
-  function curveCrossings(p1, control, p2, obstacles) {
-    let hits = 0;
-    const samples = curveSampleCount(p1, p2);
-    for (let i = 1; i < samples; i++) {
-      const point = bezierAt(p1, control, p2, i / samples);
-      for (const rect of obstacles) {
-        if (point.x > rect.x - CURVE_PAD && point.x < rect.x + rect.w + CURVE_PAD && point.y > rect.y - CURVE_PAD && point.y < rect.y + rect.h + CURVE_PAD) {
-          hits++;
-          break;
-        }
+      candidates.sort((a, b) => a.distance - b.distance);
+      for (const candidate of candidates) {
+        const geo = buildCurve(p1, side1, p2, side2, candidate.point, spread);
+        if (curveCrossings(geo, obstacles) === 0) return geo;
       }
-    }
-    return hits;
-  }
-  function clearCurve(p1, base, p2, obstacles, ring = true) {
-    let best = base;
-    let bestHits = curveCrossings(p1, base, p2, obstacles);
-    if (bestHits === 0) return base;
-    const vx = p2.x - p1.x;
-    const vy = p2.y - p1.y;
-    const len = Math.hypot(vx, vy) || 1;
-    const nx = -vy / len;
-    const ny = vx / len;
-    const ux = vx / len;
-    const uy = vy / len;
-    const candidates = [];
-    for (const along of [0, 70, -70, 140, -140]) {
-      for (const perp of [0, 40, -40, 80, -80, 120, -120, 160, -160, 200, -200, 260, -260, 320, -320]) {
-        if (!along && !perp) continue;
-        const point = {
-          x: base.x + nx * perp + ux * along,
-          y: base.y + ny * perp + uy * along
-        };
-        candidates.push({ point, distance: Math.hypot(perp, along) });
-      }
-    }
-    candidates.sort((a, b) => a.distance - b.distance);
-    for (const candidate of candidates) {
-      const hits = curveCrossings(p1, candidate.point, p2, obstacles);
-      if (hits === 0) return candidate.point;
-      if (hits < bestHits) {
-        best = candidate.point;
-        bestHits = hits;
-      }
-    }
-    if (ring) {
       for (const radius of [400, 480, 560, 640, 720, 800]) {
         for (const angle of [0, 45, -45, 90, -90, 135, -135, 180]) {
           const rad = angle * Math.PI / 180;
-          const perp = radius * Math.cos(rad);
-          const along = radius * Math.sin(rad);
           const point = {
-            x: base.x + nx * perp + ux * along,
-            y: base.y + ny * perp + uy * along
+            x: base.x + px * radius * Math.cos(rad) + vx / len * radius * Math.sin(rad),
+            y: base.y + py * radius * Math.cos(rad) + vy / len * radius * Math.sin(rad)
           };
-          if (curveCrossings(p1, point, p2, obstacles) === 0) return point;
+          const geo = buildCurve(p1, side1, p2, side2, point, spread);
+          if (curveCrossings(geo, obstacles) === 0) return geo;
         }
       }
     }
-    return best;
-  }
-  function curveClears(p1, control, p2, obstacles) {
-    return curveCrossings(p1, control, p2, obstacles) === 0;
-  }
-  function curveLength(p1, control, p2) {
-    let total = 0;
-    let prev = p1;
-    for (let i = 1; i <= 24; i++) {
-      const point = bezierAt(p1, control, p2, i / 24);
-      total += Math.hypot(point.x - prev.x, point.y - prev.y);
-      prev = point;
-    }
-    return total;
-  }
-  function leavesAnchor(control, anchor, side) {
-    const out = SIDE_OUT[side];
-    return (control.x - anchor.x) * out.x + (control.y - anchor.y) * out.y > 0;
-  }
-  function reanchorCurve(fromBox, toBox, p1, p2, via, spread, obstacles) {
-    const fromSide = edgeSide(p1, fromBox);
-    const toSide = edgeSide(p2, toBox);
-    const alternatives = (box, side, anchor) => SIDES.filter((item) => item !== side).map((item) => ({ side: item, point: sideMidpoint(box, item) })).sort(
-      (a, b) => Math.hypot(a.point.x - anchor.x, a.point.y - anchor.y) - Math.hypot(b.point.x - anchor.x, b.point.y - anchor.y)
-    ).slice(0, 2);
-    const fromOptions = alternatives(fromBox, fromSide, p1);
-    const toOptions = alternatives(toBox, toSide, p2);
-    const attempts = [];
-    for (const option of fromOptions) {
-      attempts.push({ p1: option.point, p2, fromSide: option.side, toSide, changed: 1 });
-    }
-    for (const option of toOptions) {
-      attempts.push({ p1, p2: option.point, fromSide, toSide: option.side, changed: 1 });
-    }
-    for (const from of fromOptions) {
-      for (const to of toOptions) {
-        attempts.push({ p1: from.point, p2: to.point, fromSide: from.side, toSide: to.side, changed: 2 });
-      }
-    }
-    let best = null;
-    for (const attempt of attempts) {
-      const mx = (attempt.p1.x + attempt.p2.x) / 2;
-      const my = (attempt.p1.y + attempt.p2.y) / 2;
-      const vx = attempt.p2.x - attempt.p1.x;
-      const vy = attempt.p2.y - attempt.p1.y;
-      const len = Math.hypot(vx, vy) || 1;
-      const base = {
-        x: mx + via.x + -vy / len * spread,
-        y: my + via.y + vx / len * spread
-      };
-      const control = clearCurve(attempt.p1, base, attempt.p2, obstacles, false);
-      if (!curveClears(attempt.p1, control, attempt.p2, obstacles)) continue;
-      if (!leavesAnchor(control, attempt.p1, attempt.fromSide)) continue;
-      if (!leavesAnchor(control, attempt.p2, attempt.toSide)) continue;
-      const score = curveLength(attempt.p1, control, attempt.p2) + attempt.changed * 80;
-      if (!best || score < best.score) {
-        best = { p1: attempt.p1, p2: attempt.p2, control, score };
-      }
-    }
-    return best ? { p1: best.p1, p2: best.p2, control: best.control } : null;
+    return detourGeometry(edge, ctx, obstacles, control, spread) ?? first;
   }
   function groupBoundingBox(nodes, options = DEFAULT_BOX) {
     if (!nodes.length) return null;
@@ -1510,31 +1592,24 @@ var BlockML = (() => {
     if (!Number.isFinite(x0)) return { x: 0, y: 0, w: 800, h: 600 };
     return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
   }
-  function autoLayout(document2, options = DEFAULT_BOX) {
-    const width = options.width ?? DEFAULT_BOX.width;
-    const height = options.height ?? DEFAULT_BOX.height;
-    const gapX = options.columnGap ?? 70;
-    const rowHeight = options.rowHeight ?? height + 110;
-    const origin = options.origin ?? { x: 80, y: 80 };
-    const perRow = options.perRow ?? Math.max(3, Math.ceil(Math.sqrt(Math.max(1, document2.nodes.length))));
-    const result = /* @__PURE__ */ new Map();
-    let index = 0;
-    for (const node of document2.nodes) {
-      if (node.at) {
-        result.set(node.id, node.at);
-        index++;
-        continue;
-      }
-      const col = index % perRow;
-      const row = Math.floor(index / perRow);
-      result.set(node.id, { x: origin.x + col * (width + gapX), y: origin.y + row * rowHeight });
-      index++;
-    }
-    return result;
-  }
   function pathOf(geo) {
     const f = (n) => Number(n.toFixed(2));
-    return `M ${f(geo.p1.x)} ${f(geo.p1.y)} Q ${f(geo.control.x)} ${f(geo.control.y)} ${f(geo.p2.x)} ${f(geo.p2.y)}`;
+    if (geo.detour?.length) {
+      const [first, ...rest] = geo.detour;
+      return `M ${f(first.x)} ${f(first.y)}${rest.map((point) => ` L ${f(point.x)} ${f(point.y)}`).join("")}`;
+    }
+    if (!geo.segments?.length) {
+      return `M ${f(geo.p1.x)} ${f(geo.p1.y)} Q ${f(geo.control.x)} ${f(geo.control.y)} ${f(geo.p2.x)} ${f(geo.p2.y)}`;
+    }
+    let d = `M ${f(geo.segments[0].a.x)} ${f(geo.segments[0].a.y)}`;
+    for (const segment of geo.segments) {
+      if (segment.type === "line") {
+        d += ` L ${f(segment.b.x)} ${f(segment.b.y)}`;
+      } else {
+        d += ` C ${f(segment.c1.x)} ${f(segment.c1.y)} ${f(segment.c2.x)} ${f(segment.c2.y)} ${f(segment.b.x)} ${f(segment.b.y)}`;
+      }
+    }
+    return d;
   }
   var ROUTE_STUB = 24;
   var LANE_SPACING = 12;
@@ -1607,6 +1682,47 @@ var BlockML = (() => {
       side,
       point: sidePoint(box, side, positions[index])
     }));
+  }
+  function planPorts(uses, gap = PORT_GAP) {
+    const assignments = [];
+    for (const use of uses) {
+      const groups = use.bundles.map((bundle) => ({
+        key: bundle.key,
+        desired: bundle.desired
+      }));
+      const bundles = new Map(use.bundles.map((bundle) => [bundle.key, bundle]));
+      const average = (items) => items.reduce((sum, item) => sum + item.desired, 0) / Math.max(1, items.length);
+      if (use.ins.length) groups.push({ key: "in", desired: average(use.ins) });
+      if (use.outs.length) groups.push({ key: "out", desired: average(use.outs) });
+      if (!groups.length) continue;
+      for (const port of planSidePorts(use.box, use.side, groups, gap)) {
+        const bundle = bundles.get(port.key);
+        if (bundle) {
+          for (const edge of bundle.edges) {
+            assignments.push({
+              edgeId: edge.id,
+              end: bundle.end,
+              side: use.side,
+              point: port.point,
+              bundle: port.key
+            });
+          }
+          continue;
+        }
+        if (port.key !== "in" && port.key !== "out") continue;
+        const end = port.key === "in" ? "to" : "from";
+        const list = port.key === "in" ? use.ins : use.outs;
+        for (const item of list) {
+          assignments.push({
+            edgeId: item.edge.id,
+            end,
+            side: use.side,
+            point: port.point
+          });
+        }
+      }
+    }
+    return assignments;
   }
   var GUIDE_PAD = 10;
   var GUIDE_EPSILON = 0.5;
@@ -1730,6 +1846,98 @@ var BlockML = (() => {
     const dy = other.cy - box.cy;
     if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? "right" : "left";
     return dy >= 0 ? "bottom" : "top";
+  }
+  function planCurveSides(document2, options = {}) {
+    const box = options.box ?? DEFAULT_BOX;
+    const result = /* @__PURE__ */ new Map();
+    const byId = new Map(document2.nodes.map((node) => [node.id, node]));
+    const boxes = new Map(document2.nodes.map((node) => [node.id, boxOf(node, box)]));
+    const pairs = indexPairs(document2);
+    const obstacles = options.obstacles ?? document2.nodes.map((node) => ({ id: node.id, rect: boxOf(node, box) }));
+    const soft = options.soft ?? [];
+    const anchors = options.anchors;
+    const margin = options.margin ?? 120;
+    const bounds = obstacles.reduce((acc, item) => {
+      const r = item.rect;
+      if (!acc) return { ...r };
+      const x = Math.min(acc.x, r.x);
+      const y = Math.min(acc.y, r.y);
+      return {
+        x,
+        y,
+        w: Math.max(acc.x + acc.w, r.x + r.w) - x,
+        h: Math.max(acc.y + acc.h, r.y + r.h) - y
+      };
+    }, null);
+    const blockers = obstacles.map((item) => item.rect);
+    const trial = (edge, fromSide, toSide) => {
+      const fromBox = boxes.get(edge.from);
+      const toBox = boxes.get(edge.to);
+      if (!fromBox || !toBox) return false;
+      const fromPoint = sidePoint(fromBox, fromSide, sideAlong(fromBox, fromSide, { x: toBox.cx, y: toBox.cy }));
+      const toPoint = sidePoint(toBox, toSide, sideAlong(toBox, toSide, { x: fromBox.cx, y: fromBox.cy }));
+      const geo = edgeGeometry(edge, {
+        byId,
+        pairs,
+        box,
+        obstacles,
+        soft,
+        anchors: /* @__PURE__ */ new Map([[edge.id, {
+          from: { side: fromSide, point: fromPoint },
+          to: { side: toSide, point: toPoint }
+        }]])
+      });
+      if (!geo || geo.detour) return false;
+      const points = sampleEdgePath(geo, 96);
+      let pathLength = 0;
+      for (let i = 1; i < points.length; i++) {
+        pathLength += distance(points[i - 1], points[i]);
+      }
+      const direct = distance(fromPoint, toPoint);
+      if (pathLength > Math.max(direct * 2.2, direct + 260)) return false;
+      const own = /* @__PURE__ */ new Set([edge.from, edge.to]);
+      for (const point of points) {
+        if (bounds && (point.x < bounds.x - margin || point.x > bounds.x + bounds.w + margin || point.y < bounds.y - margin || point.y > bounds.y + bounds.h + margin)) return false;
+        for (let i = 0; i < blockers.length; i++) {
+          if (own.has(obstacles[i].id)) continue;
+          const rect = blockers[i];
+          if (point.x > rect.x + 1 && point.x < rect.x + rect.w - 1 && point.y > rect.y + 1 && point.y < rect.y + rect.h - 1) return false;
+        }
+      }
+      return true;
+    };
+    for (const edge of document2.edges) {
+      const fromBox = boxes.get(edge.from);
+      const toBox = boxes.get(edge.to);
+      if (!fromBox || !toBox) continue;
+      const forced = anchors?.get(edge.id);
+      const primary = {
+        from: primarySide(fromBox, toBox),
+        to: primarySide(toBox, fromBox)
+      };
+      if (!forced?.from && !forced?.to && trial(edge, primary.from, primary.to)) {
+        result.set(edge.id, primary);
+        continue;
+      }
+      const route = orthogonalRoute(edge, {
+        byId,
+        pairs,
+        box,
+        obstacles,
+        soft,
+        anchors
+      }, 0);
+      if (!route) {
+        result.set(edge.id, primary);
+        continue;
+      }
+      const last = route.points[route.points.length - 1];
+      result.set(edge.id, {
+        from: forced?.from?.side ?? edgeSide(route.points[0], fromBox),
+        to: forced?.to?.side ?? edgeSide(last, toBox)
+      });
+    }
+    return result;
   }
   function segmentHitsRect(a, b, rect, pad) {
     const x0 = Math.min(a.x, b.x);
@@ -2169,6 +2377,13 @@ var BlockML = (() => {
         return layered(document2, resolved);
     }
   }
+  function defaultLayout(document2, options) {
+    const positions = layoutDocument(document2, "layered", options);
+    for (const node of document2.nodes) {
+      if (node.at) positions.set(node.id, node.at);
+    }
+    return positions;
+  }
   function relatedEdges(document2, id) {
     const set = /* @__PURE__ */ new Set();
     if (!id) return set;
@@ -2222,6 +2437,287 @@ var BlockML = (() => {
     return count;
   }
 
+  // packages/core/src/labels.ts
+  function pathMetrics(points) {
+    const lengths = [0];
+    let total = 0;
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1];
+      const b = points[i];
+      total += Math.hypot(b.x - a.x, b.y - a.y);
+      lengths.push(total);
+    }
+    return { points, lengths, total };
+  }
+  function pointAtLength(path, distance2) {
+    const s = Math.max(0, Math.min(path.total, distance2));
+    for (let i = 1; i < path.points.length; i++) {
+      if (path.lengths[i] >= s) {
+        const segStart = path.lengths[i - 1];
+        const k = (s - segStart) / Math.max(path.lengths[i] - segStart, 1e-6);
+        const a = path.points[i - 1];
+        const b = path.points[i];
+        return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
+      }
+    }
+    return path.points[path.points.length - 1];
+  }
+  function rectOverlapArea(a, b, pad) {
+    const x0 = Math.max(a.x, b.x - pad);
+    const y0 = Math.max(a.y, b.y - pad);
+    const x1 = Math.min(a.x + a.w, b.x + b.w + pad);
+    const y1 = Math.min(a.y + a.h, b.y + b.h + pad);
+    return Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
+  }
+  function labelPenalty(rect, obstacles, placed) {
+    let penalty = 0;
+    for (const obstacle of obstacles) penalty += rectOverlapArea(rect, obstacle, 1) * 4;
+    for (const other of placed) penalty += rectOverlapArea(rect, other, 4);
+    return penalty;
+  }
+  function placeLabelOnPath(path, width, height, obstacles, placed, options = {}) {
+    const maxOffset = Math.max(0, options.maxOffset ?? 8);
+    const offsets = [0, 6, -6, 8, -8].filter((offset) => Math.abs(offset) <= maxOffset);
+    if (!offsets.length) offsets.push(0);
+    const seen = /* @__PURE__ */ new Set();
+    const candidates = [];
+    const push = (t, offset) => {
+      if (!t || t <= 0 || t >= 1) return;
+      const key = `${t.toFixed(3)}:${offset}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      candidates.push({ t, offset });
+    };
+    const range = options.range;
+    const inRange = (t) => !range || t >= range[0] && t <= range[1];
+    const pad = (width / 2 + 6) / Math.max(1, path.total);
+    const foreignCount = (t) => {
+      if (!options.avoid) return 0;
+      const last = options.avoid.length - 1;
+      const lo = Math.max(0, Math.round((t - pad) * last));
+      const hi = Math.min(last, Math.round((t + pad) * last));
+      let count = 0;
+      for (let i = lo; i <= hi; i++) if (options.avoid[i]) count++;
+      return count;
+    };
+    const ts = [];
+    for (let i = 1; i < 50; i++) ts.push(i / 50);
+    for (let i = 0; i < path.points.length - 1; i++) {
+      const length = path.lengths[i + 1] - path.lengths[i];
+      if (length < 24) continue;
+      ts.push((path.lengths[i] + length / 2) / Math.max(1, path.total));
+    }
+    const ordered = [...new Set(ts.map((t) => Number(t.toFixed(4))))].filter(inRange).sort((a, b) => Math.abs(a - 0.5) - Math.abs(b - 0.5));
+    for (const offset of offsets) {
+      for (const t of ordered) push(t, offset);
+    }
+    if (!candidates.length) {
+      for (const offset of offsets) {
+        for (let i = 1; i < 50; i++) push(i / 50, offset);
+      }
+    }
+    let best = null;
+    let bestPenalty = Infinity;
+    for (const { t, offset } of candidates) {
+      const point2 = pointAtLength(path, t * path.total);
+      const rect = {
+        x: point2.x - width / 2 - 5,
+        y: point2.y - height / 2 + offset,
+        w: width + 10,
+        h: height
+      };
+      const penalty = labelPenalty(rect, obstacles, placed) + foreignCount(t) * 30;
+      if (penalty === 0) return { x: point2.x, y: point2.y + offset, t, offset, rect };
+      if (penalty < bestPenalty) {
+        bestPenalty = penalty;
+        best = { x: point2.x, y: point2.y + offset, t, offset, rect };
+      }
+    }
+    if (best) return best;
+    const point = pointAtLength(path, path.total * 0.5);
+    return {
+      x: point.x,
+      y: point.y,
+      t: 0.5,
+      offset: 0,
+      rect: { x: point.x - width / 2 - 5, y: point.y - height / 2, w: width + 10, h: height }
+    };
+  }
+
+  // packages/viewer/src/paths.ts
+  var HOP_RADIUS = 7;
+  var HOP_MIN_T = 0.05;
+  var HOP_MAX_T = 0.95;
+  function segmentHit(a1, a2, b1, b2) {
+    const ax = a2.x - a1.x;
+    const ay = a2.y - a1.y;
+    const bx = b2.x - b1.x;
+    const by = b2.y - b1.y;
+    const denom = ax * by - ay * bx;
+    if (Math.abs(denom) < 1e-9) return null;
+    const ox = b1.x - a1.x;
+    const oy = b1.y - a1.y;
+    const ua = (ox * by - oy * bx) / denom;
+    const ub = (ox * ay - oy * ax) / denom;
+    if (ua < 0 || ua > 1 || ub < 0 || ub > 1) return null;
+    return ub;
+  }
+  function boundsOf(points) {
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const point of points) {
+      x0 = Math.min(x0, point.x);
+      y0 = Math.min(y0, point.y);
+      x1 = Math.max(x1, point.x);
+      y1 = Math.max(y1, point.y);
+    }
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+  function shareNode(a, b) {
+    return a.from === b.from || a.from === b.to || a.to === b.from || a.to === b.to;
+  }
+  function hopsBetween(edges, paths) {
+    const hops = /* @__PURE__ */ new Map();
+    for (let i = 0; i < edges.length; i++) {
+      const first = edges[i];
+      const a = paths.get(first.id);
+      if (!a) continue;
+      const aBox = boundsOf(a.points);
+      for (let j = i + 1; j < edges.length; j++) {
+        const second = edges[j];
+        const b = paths.get(second.id);
+        if (!b) continue;
+        const bBox = boundsOf(b.points);
+        if (aBox.x + aBox.w < bBox.x || bBox.x + bBox.w < aBox.x || aBox.y + aBox.h < bBox.y || bBox.y + bBox.h < aBox.y) continue;
+        const shares = shareNode(first, second);
+        const found = [];
+        for (let s = 0; s < a.points.length - 1; s++) {
+          for (let k = 0; k < b.points.length - 1; k++) {
+            const ub = segmentHit(a.points[s], a.points[s + 1], b.points[k], b.points[k + 1]);
+            if (ub === null) continue;
+            const distance2 = b.lengths[k] + ub * (b.lengths[k + 1] - b.lengths[k]);
+            const t = b.total ? distance2 / b.total : 0;
+            if (t < HOP_MIN_T || t > HOP_MAX_T) continue;
+            if (shares && (t < 0.12 || t > 0.88)) continue;
+            found.push(t);
+          }
+        }
+        if (found.length) hops.set(second.id, [...hops.get(second.id) ?? [], ...found]);
+      }
+    }
+    return hops;
+  }
+  function computeHops(edges, geos) {
+    const paths = /* @__PURE__ */ new Map();
+    for (const edge of edges) {
+      const geo = geos.get(edge.id);
+      if (geo) paths.set(edge.id, pathMetrics(sampleEdgePath(geo, 96)));
+    }
+    return hopsBetween(edges, paths);
+  }
+  function computePolylineHops(edges, routes) {
+    const paths = /* @__PURE__ */ new Map();
+    for (const edge of edges) {
+      const route = routes.get(edge.id);
+      if (route) paths.set(edge.id, pathMetrics(route.points));
+    }
+    return hopsBetween(edges, paths);
+  }
+  var CORNER_RADIUS = 4;
+  function polylinePath(points, hops) {
+    const f = (n) => Number(n.toFixed(2));
+    if (points.length < 2) return "";
+    const path = pathMetrics(points);
+    const radiusAt = (index) => {
+      if (index <= 0 || index >= points.length - 1) return 0;
+      const prev = path.lengths[index] - path.lengths[index - 1];
+      const next = path.lengths[index + 1] - path.lengths[index];
+      if (prev < 2 || next < 2) return 0;
+      return Math.min(CORNER_RADIUS, prev / 2, next / 2);
+    };
+    const at = (distance2) => pointAtLength(path, distance2);
+    const cuts = [];
+    if (hops?.length) {
+      for (const t of [...hops].sort((a, b) => a - b)) {
+        const s = t * path.total;
+        if (s < 22 || s > path.total - 22) continue;
+        if (cuts.length && s - cuts[cuts.length - 1] < 18) continue;
+        cuts.push(s);
+      }
+    }
+    let d = `M ${f(points[0].x)} ${f(points[0].y)}`;
+    let cut = 0;
+    for (let i = 1; i < points.length; i++) {
+      const segStart = path.lengths[i - 1];
+      const segEnd = path.lengths[i];
+      const endR = radiusAt(i);
+      while (cut < cuts.length && cuts[cut] <= segEnd) {
+        const s = cuts[cut];
+        if (s >= segStart + radiusAt(i - 1) + 9 && s <= segEnd - endR - 9) {
+          const from = at(s - HOP_RADIUS);
+          const to = at(s + HOP_RADIUS);
+          d += ` L ${f(from.x)} ${f(from.y)} A ${HOP_RADIUS} ${HOP_RADIUS} 0 0 1 ${f(to.x)} ${f(to.y)}`;
+        }
+        cut++;
+      }
+      const end = at(segEnd - endR);
+      d += ` L ${f(end.x)} ${f(end.y)}`;
+      if (endR > 0) {
+        const corner = points[i];
+        const after = at(segEnd + endR);
+        d += ` Q ${f(corner.x)} ${f(corner.y)} ${f(after.x)} ${f(after.y)}`;
+      }
+    }
+    return d;
+  }
+  function polylineWithHops(points, hops) {
+    const f = (n) => Number(n.toFixed(2));
+    const path = pathMetrics(points);
+    if (!hops.length || points.length < 2) return polylinePath(points);
+    const cuts = [];
+    for (const t of [...hops].sort((a, b) => a - b)) {
+      const s = t * path.total;
+      if (s < 22 || s > path.total - 22) continue;
+      if (cuts.length && s - cuts[cuts.length - 1] < 18) continue;
+      cuts.push(s);
+    }
+    if (!cuts.length) return polylinePath(points);
+    const at = (distance2) => pointAtLength(path, distance2);
+    let d = `M ${f(points[0].x)} ${f(points[0].y)}`;
+    let index = 1;
+    let cursor = 0;
+    const emitTo = (target) => {
+      while (index < points.length && path.lengths[index] <= target) {
+        d += ` L ${f(points[index].x)} ${f(points[index].y)}`;
+        index++;
+      }
+      if (target > cursor && target < path.total) {
+        const point = at(target);
+        d += ` L ${f(point.x)} ${f(point.y)}`;
+      }
+      cursor = target;
+    };
+    for (const s of cuts) {
+      const from = s - HOP_RADIUS;
+      const to = s + HOP_RADIUS;
+      if (from <= cursor + 1) continue;
+      emitTo(from);
+      const end = at(to);
+      d += ` A ${HOP_RADIUS} ${HOP_RADIUS} 0 0 1 ${f(end.x)} ${f(end.y)}`;
+      cursor = to;
+      while (index < points.length && path.lengths[index] <= to) index++;
+    }
+    emitTo(path.total);
+    return d;
+  }
+  function edgePath(geo, hops) {
+    if (geo.detour?.length) return polylinePath(geo.detour, hops);
+    if (!hops?.length) return pathOf(geo);
+    return polylineWithHops(sampleEdgePath(geo, 96), hops);
+  }
+
   // packages/viewer/src/styles.ts
   var VIEWER_CSS = `
 .bml-root{
@@ -2256,6 +2752,9 @@ var BlockML = (() => {
 }
 .bml-svg{flex:1;width:100%;height:100%;display:block;touch-action:none;cursor:default}
 .bml-root.bml-readonly .bml-node{cursor:default}
+.bml-root.bml-presentation .bml-node{cursor:default}
+.bml-root.bml-presentation .bml-group-toggle,
+.bml-root.bml-presentation .bml-align-bar{display:none!important}
 .bml-grid-dot{fill:var(--bml-grid)}
 .bml-group-box{fill-opacity:.06;stroke-opacity:.3;stroke-width:1.2}
 .bml-group-box.bml-collapsed{fill-opacity:.1;stroke-dasharray:5 4}
@@ -2478,11 +2977,13 @@ var BlockML = (() => {
     diagnostics = [];
     view = { x: 40, y: 20, k: 1 };
     routeStyle = "curve";
+    mode;
     selectedNode = null;
     selectedNodes = /* @__PURE__ */ new Set();
     selectedEdge = null;
     pointerSelected = false;
-    fans = /* @__PURE__ */ new Map();
+    junctions = /* @__PURE__ */ new Map();
+    edgePaths = /* @__PURE__ */ new Map();
     bundleOf = /* @__PURE__ */ new Map();
     bundleGroups = [];
     bundleInfo = /* @__PURE__ */ new Map();
@@ -2504,9 +3005,11 @@ var BlockML = (() => {
       injectStyles();
       this.options = options;
       this.source = options.source;
+      this.mode = options.mode ?? "editing";
       this.root = document.createElement("div");
       this.root.className = "bml-root";
       this.root.dataset.bmlTheme = options.theme ?? "light";
+      this.root.classList.add(this.mode === "presentation" ? "bml-presentation" : "bml-editing");
       if (options.readOnly) this.root.classList.add("bml-readonly");
       target.appendChild(this.root);
       this.svg = el("svg", { class: "bml-svg" });
@@ -2570,7 +3073,7 @@ var BlockML = (() => {
       }
       this.hideErrors();
       const doc = result.document;
-      const layout = autoLayout(doc);
+      const layout = defaultLayout(doc);
       for (const node of doc.nodes) {
         if (!node.at) node.at = layout.get(node.id) ?? { x: 0, y: 0 };
       }
@@ -2621,6 +3124,15 @@ var BlockML = (() => {
         y = Math.min(y, chip.y);
         x1 = Math.max(x1, chip.x + chip.w);
         y1 = Math.max(y1, chip.y + chip.h);
+      }
+      for (const layer of [this.edgeLayer, this.labelLayer]) {
+        if (typeof layer.getBBox !== "function" || !layer.childElementCount) continue;
+        const box = layer.getBBox();
+        if (!Number.isFinite(box.x) || !Number.isFinite(box.y) || !box.width && !box.height) continue;
+        x = Math.min(x, box.x);
+        y = Math.min(y, box.y);
+        x1 = Math.max(x1, box.x + box.width);
+        y1 = Math.max(y1, box.y + box.height);
       }
       return { x, y, w: x1 - x, h: y1 - y };
     }
@@ -2734,10 +3246,11 @@ var BlockML = (() => {
     }
     render() {
       if (!this.doc || !this.viewDoc) return;
-      this.routeStyle = this.doc.diagram?.route ?? "curve";
+      this.routeStyle = this.options.route ?? this.doc.diagram?.route ?? "curve";
       this.nodeEls.clear();
       this.edgeEls.clear();
       this.groupEls.clear();
+      this.edgePaths.clear();
       this.placedLabels = [];
       this.groupLayer.innerHTML = "";
       this.edgeLayer.innerHTML = "";
@@ -2747,14 +3260,16 @@ var BlockML = (() => {
       this.uiLayer.innerHTML = "";
       this.guideLayer.innerHTML = "";
       this.overlayLayer.innerHTML = "";
-      const grid = el("rect", {
-        x: -8e3,
-        y: -8e3,
-        width: 16e3,
-        height: 16e3,
-        fill: "url(#bml-grid)"
-      });
-      this.groupLayer.appendChild(grid);
+      if (this.mode === "editing") {
+        const grid = el("rect", {
+          x: -8e3,
+          y: -8e3,
+          width: 16e3,
+          height: 16e3,
+          fill: "url(#bml-grid)"
+        });
+        this.groupLayer.appendChild(grid);
+      }
       this.renderGroups();
       this.renderEdges();
       this.renderNodes();
@@ -2772,7 +3287,8 @@ var BlockML = (() => {
         const shown = members.filter((node) => isNodeVisible(node, this.visibility()));
         if (!collapsed && !shown.length) continue;
         const box = collapsed ? this.collapseChip(full) : groupBoundingBox(shown);
-        const color = group.color ?? "#64748b";
+        const index = this.doc.groups.findIndex((item) => item.id === group.id);
+        const color = group.color ?? GROUP_PALETTE[Math.max(0, index) % GROUP_PALETTE.length];
         const label = group.label ?? group.title;
         const rect = el("rect", {
           x: box.x,
@@ -2841,70 +3357,24 @@ var BlockML = (() => {
           event.stopPropagation();
           this.toggleGroupCollapsed(group.id);
         });
-        this.uiLayer.appendChild(toggle);
+        if (this.mode === "editing") this.uiLayer.appendChild(toggle);
         this.groupEls.set(group.id, { rect, text, toggle, sign });
       }
     }
-    edgeGeometryOf(edge, obstacles) {
+    edgeGeometryOf(edge, obstacles, soft = []) {
       if (!this.viewDoc) return null;
       return edgeGeometry(edge, {
         byId: this.nodeMap(),
         pairs: indexPairs(this.viewDoc),
-        fans: this.fans,
-        obstacles
+        obstacles,
+        soft,
+        anchors: this.forcedAnchors,
+        junctions: this.junctions,
+        trunks: this.trunks
       });
     }
     nodeMap() {
       return new Map(this.viewDoc?.nodes.map((n) => [n.id, n]) ?? []);
-    }
-    /**
-     * Edges that meet at a node fan out along its border instead of leaving from
-     * the same anchor point, so they never draw on top of each other. Offsets
-     * follow the anchor's position along the border — sorting by target angle
-     * would invert the order and cancel the spread.
-     */
-    computeFans() {
-      this.fans = /* @__PURE__ */ new Map();
-      if (!this.viewDoc) return;
-      const nodes = this.nodeMap();
-      const groups = /* @__PURE__ */ new Map();
-      const push = (nodeId, item) => {
-        const key = `${nodeId}\0${item.side}`;
-        const list = groups.get(key);
-        if (list) list.push(item);
-        else groups.set(key, [item]);
-      };
-      for (const edge of this.viewDoc.edges) {
-        const from = nodes.get(edge.from);
-        const to = nodes.get(edge.to);
-        if (!from || !to) continue;
-        const fc = boxOf(from);
-        const tc = boxOf(to);
-        const a1 = anchorPoint(from, { x: tc.cx, y: tc.cy });
-        const a2 = anchorPoint(to, { x: fc.cx, y: fc.cy });
-        const s1 = edgeSide(a1, fc);
-        const s2 = edgeSide(a2, tc);
-        const along = (point, side) => side === "top" || side === "bottom" ? point.x : point.y;
-        push(edge.from, { edge, end: "from", side: s1, box: fc, along: along(a1, s1) });
-        push(edge.to, { edge, end: "to", side: s2, box: tc, along: along(a2, s2) });
-      }
-      for (const list of groups.values()) {
-        if (list.length < 2) continue;
-        list.sort((a, b) => a.along - b.along);
-        const box = list[0].box;
-        const range = sideRange(box, list[0].side);
-        const step = Math.min(14, (range.max - range.min) / (list.length - 1));
-        const span = step * (list.length - 1);
-        const midpoint = (list[0].along + list[list.length - 1].along) / 2;
-        const start = clamp(midpoint - span / 2, range.min, range.max - span);
-        list.forEach((item, index) => {
-          const offset = Math.round(start + index * step - item.along);
-          if (!offset) return;
-          const slot = this.fans.get(item.edge.id) ?? {};
-          slot[item.end] = offset;
-          this.fans.set(item.edge.id, slot);
-        });
-      }
     }
     /**
      * Edges that declare the same `bundle:` share their common endpoint and a
@@ -3046,11 +3516,28 @@ var BlockML = (() => {
       }
     }
     /**
-     * Ports are assigned after a first routing pass: only sides that actually
-     * carry edges are considered, and inbound/outbound edges on one side get
-     * separate attachment points while their own groups still share one. Bundles
-     * keep their own point on the same rail. The final pass is pinned to these
-     * ports, so a line entering a node can never sit on a line leaving it.
+     * Shared port rail for both route styles. Every node border gets one port per
+     * direction plus one per bundle; the assignments are written back into the
+     * forced-anchor map the geometry reads.
+     */
+    applyPortAssignments(assignments) {
+      for (const assignment of assignments) {
+        const forced = this.forcedAnchors.get(assignment.edgeId) ?? {};
+        forced[assignment.end] = { point: assignment.point, side: assignment.side };
+        this.forcedAnchors.set(assignment.edgeId, forced);
+        if (!assignment.bundle) continue;
+        const info = this.bundleInfo.get(assignment.edgeId);
+        if (info) {
+          info.sharedX = assignment.point.x;
+          info.sharedY = assignment.point.y;
+        }
+      }
+    }
+    /**
+     * Ports are assigned after a first orthogonal routing pass: only sides that
+     * actually carry edges are considered, and inbound/outbound edges on one side
+     * get separate attachment points while their own groups still share one.
+     * Bundles keep their own point on the same rail.
      */
     computePorts(baseline) {
       if (!this.viewDoc) return;
@@ -3061,13 +3548,20 @@ var BlockML = (() => {
         const key = `${nodeId}\0${side}`;
         let use = uses.get(key);
         if (!use) {
-          use = { box: boxes.get(nodeId), ins: [], outs: [], bundles: [] };
+          use = { box: boxes.get(nodeId), side, ins: [], outs: [], bundles: [] };
           uses.set(key, use);
         }
         return use;
       };
       for (const group of this.bundleGroups) {
-        useOf(group.nodeId, group.side).bundles.push(group);
+        const box = boxes.get(group.nodeId);
+        if (!box) continue;
+        useOf(group.nodeId, group.side).bundles.push({
+          key: `bundle:${group.name}`,
+          desired: sideAlong(box, group.side, group.centroid),
+          edges: group.edges,
+          end: group.end
+        });
       }
       for (const edge of this.viewDoc.edges) {
         const route = baseline.get(edge.id);
@@ -3077,58 +3571,104 @@ var BlockML = (() => {
         if (!fromBox || !toBox) continue;
         const bundled = this.bundleInfo.get(edge.id)?.end;
         if (bundled !== "from") {
-          useOf(edge.from, edgeSide(route.points[0], fromBox)).outs.push(edge);
+          const side = edgeSide(route.points[0], fromBox);
+          useOf(edge.from, side).outs.push({
+            edge,
+            desired: sideAlong(fromBox, side, { x: toBox.cx, y: toBox.cy })
+          });
         }
         if (bundled !== "to") {
           const last = route.points[route.points.length - 1];
-          useOf(edge.to, edgeSide(last, toBox)).ins.push(edge);
+          const side = edgeSide(last, toBox);
+          useOf(edge.to, side).ins.push({
+            edge,
+            desired: sideAlong(toBox, side, { x: fromBox.cx, y: fromBox.cy })
+          });
         }
       }
-      for (const [key, use] of uses) {
-        const side = key.slice(key.indexOf("\0") + 1);
-        const groups = use.bundles.map((bundle) => ({
-          key: `bundle:${bundle.name}`,
-          desired: sideAlong(use.box, side, bundle.centroid)
-        }));
-        const bundles = new Map(use.bundles.map((bundle) => [`bundle:${bundle.name}`, bundle]));
-        if (use.ins.length) {
-          const desired = use.ins.reduce((sum, edge) => {
-            const other = boxes.get(edge.from);
-            return sum + (other ? sideAlong(use.box, side, { x: other.cx, y: other.cy }) : 0);
-          }, 0) / use.ins.length;
-          groups.push({ key: "in", desired });
+      this.applyPortAssignments(planPorts([...uses.values()]));
+    }
+    /**
+     * Curve routing shares the same ports. Sides come from the dominant relative
+     * direction (so a layered layout exits right and enters left), bundles keep
+     * the side computed by computeBundles, and a validated trunk point turns a
+     * bundle into one shared run plus branches.
+     */
+    /**
+     * Choose which border each curve end leaves from. The dominant-direction pair
+     * wins when it stays compact and clear; the orthogonal router is the fallback
+     * for a stacked pair that needs to go around a blocker.
+     */
+    curveSides(nodeObstacles, soft) {
+      if (!this.viewDoc) return /* @__PURE__ */ new Map();
+      return planCurveSides(this.viewDoc, {
+        obstacles: nodeObstacles,
+        soft,
+        anchors: this.forcedAnchors
+      });
+    }
+    buildCurveRoutes(nodeObstacles, soft) {
+      if (!this.viewDoc) return;
+      this.computeBundles(nodeObstacles);
+      this.junctions = /* @__PURE__ */ new Map();
+      const nodes = this.nodeMap();
+      const boxes = new Map([...nodes].map(([id, node]) => [id, boxOf(node)]));
+      const sides = this.curveSides(nodeObstacles, soft);
+      const uses = /* @__PURE__ */ new Map();
+      const useOf = (nodeId, side) => {
+        const key = `${nodeId}\0${side}`;
+        let use = uses.get(key);
+        if (!use) {
+          use = { box: boxes.get(nodeId), side, ins: [], outs: [], bundles: [] };
+          uses.set(key, use);
         }
-        if (use.outs.length) {
-          const desired = use.outs.reduce((sum, edge) => {
-            const other = boxes.get(edge.to);
-            return sum + (other ? sideAlong(use.box, side, { x: other.cx, y: other.cy }) : 0);
-          }, 0) / use.outs.length;
-          groups.push({ key: "out", desired });
+        return use;
+      };
+      for (const group of this.bundleGroups) {
+        const box = boxes.get(group.nodeId);
+        if (!box) continue;
+        useOf(group.nodeId, group.side).bundles.push({
+          key: `bundle:${group.name}`,
+          desired: sideAlong(box, group.side, group.centroid),
+          edges: group.edges,
+          end: group.end
+        });
+      }
+      for (const edge of this.viewDoc.edges) {
+        const fromBox = boxes.get(edge.from);
+        const toBox = boxes.get(edge.to);
+        if (!fromBox || !toBox) continue;
+        const bundled = this.bundleInfo.get(edge.id)?.end;
+        if (bundled !== "from") {
+          const side = sides.get(edge.id)?.from ?? primarySide(fromBox, toBox);
+          useOf(edge.from, side).outs.push({
+            edge,
+            desired: sideAlong(fromBox, side, { x: toBox.cx, y: toBox.cy })
+          });
         }
-        if (!groups.length) continue;
-        for (const port of planSidePorts(use.box, side, groups)) {
-          const bundle = bundles.get(port.key);
-          if (bundle) {
-            for (const edge of bundle.edges) {
-              const forced = this.forcedAnchors.get(edge.id) ?? {};
-              forced[bundle.end] = { point: port.point, side };
-              this.forcedAnchors.set(edge.id, forced);
-              const info = this.bundleInfo.get(edge.id);
-              if (info) {
-                info.sharedX = port.point.x;
-                info.sharedY = port.point.y;
-              }
-            }
-            continue;
-          }
-          if (port.key !== "in" && port.key !== "out") continue;
-          const end = port.key === "in" ? "to" : "from";
-          const list = port.key === "in" ? use.ins : use.outs;
-          for (const edge of list) {
-            const forced = this.forcedAnchors.get(edge.id) ?? {};
-            forced[end] = { point: port.point, side };
-            this.forcedAnchors.set(edge.id, forced);
-          }
+        if (bundled !== "to") {
+          const side = sides.get(edge.id)?.to ?? primarySide(toBox, fromBox);
+          useOf(edge.to, side).ins.push({
+            edge,
+            desired: sideAlong(toBox, side, { x: fromBox.cx, y: fromBox.cy })
+          });
+        }
+      }
+      this.applyPortAssignments(planPorts([...uses.values()]));
+      for (const group of this.bundleGroups) {
+        const first = group.edges[0];
+        if (!first) continue;
+        const anchor = this.forcedAnchors.get(first.id)?.[group.end];
+        if (!anchor) continue;
+        const normal = sideNormal(anchor.side);
+        const point = {
+          x: anchor.point.x + normal.x * 30,
+          y: anchor.point.y + normal.y * 30
+        };
+        const blockers = nodeObstacles.filter((item) => item.id !== group.nodeId).map((item) => item.rect);
+        if (routeCrosses([anchor.point, point], blockers, 2)) continue;
+        for (const edge of group.edges) {
+          this.junctions.set(edge.id, { point, side: anchor.side, end: group.end });
         }
       }
     }
@@ -3229,11 +3769,11 @@ var BlockML = (() => {
     buildOrthogonalRoutes(nodeObstacles, soft) {
       if (!this.viewDoc) return /* @__PURE__ */ new Map();
       this.computeBundles(nodeObstacles);
+      this.junctions = /* @__PURE__ */ new Map();
       const edges = this.viewDoc.edges;
       const ctx = {
         byId: this.nodeMap(),
         pairs: indexPairs(this.viewDoc),
-        fans: this.fans,
         obstacles: nodeObstacles,
         soft,
         anchors: this.forcedAnchors,
@@ -3300,14 +3840,13 @@ var BlockML = (() => {
       if (paths.size < 2) return out;
       const SAMPLES = 160;
       const routes = [...paths];
-      const on = (point, start, end) => {
-        const horizontal = Math.abs(start.y - end.y) < 0.5;
-        if (horizontal) {
-          if (Math.abs(point.y - start.y) > 1.5) return false;
-          return point.x >= Math.min(start.x, end.x) - 1 && point.x <= Math.max(start.x, end.x) + 1;
-        }
-        if (Math.abs(point.x - start.x) > 1.5) return false;
-        return point.y >= Math.min(start.y, end.y) - 1 && point.y <= Math.max(start.y, end.y) + 1;
+      const near = (point, start, end) => {
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const length = Math.hypot(dx, dy);
+        if (!length) return Math.hypot(point.x - start.x, point.y - start.y) < 1.5;
+        const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (length * length)));
+        return Math.hypot(point.x - (start.x + dx * t), point.y - (start.y + dy * t)) < 1.5;
       };
       for (const [id, path] of routes) {
         const marks = new Array(SAMPLES + 1).fill(false);
@@ -3317,7 +3856,7 @@ var BlockML = (() => {
             if (otherId === id) continue;
             const points = other.points;
             for (let j = 0; j < points.length - 1; j++) {
-              if (on(point, points[j], points[j + 1])) {
+              if (near(point, points[j], points[j + 1])) {
                 marks[k] = true;
                 break;
               }
@@ -3329,7 +3868,7 @@ var BlockML = (() => {
       }
       return out;
     }
-    /** Label window that keeps bundled labels off the shared trunk. */
+    /** Label window that keeps bundled labels off the shared orthogonal trunk. */
     bundleLabelRange(path, edgeId) {
       const info = this.bundleInfo.get(edgeId);
       if (!info?.trunk) return void 0;
@@ -3352,39 +3891,63 @@ var BlockML = (() => {
       const end = (path.lengths[cut] ?? 0) - margin;
       return path.total ? [0, Math.max(0, end / path.total)] : void 0;
     }
-    renderEdges() {
-      if (!this.doc || !this.viewDoc) return;
-      this.computeFans();
+    /** Label window that keeps a curve bundle's label off its shared trunk. */
+    curveBundleLabelRange(geo, edgeId) {
+      const info = this.bundleInfo.get(edgeId);
+      if (!info || !this.junctions.has(edgeId)) return void 0;
+      const path = this.edgePaths.get(edgeId);
+      if (!path?.total) return void 0;
+      const margin = 10;
+      if (info.end === "from") {
+        const trunk2 = Math.hypot(geo.control.x - geo.p1.x, geo.control.y - geo.p1.y);
+        return [Math.min(1, (trunk2 + margin) / path.total), 1];
+      }
+      const trunk = Math.hypot(geo.p2.x - geo.control.x, geo.p2.y - geo.control.y);
+      return [0, Math.max(0, (path.total - trunk - margin) / path.total)];
+    }
+    /** Route every edge for the current style and collect label/hop paths. */
+    routeGeometry() {
       const { labels: obstacles, routes: routeObstacles, soft } = this.collectObstacles();
-      const nodes = this.nodeMap();
-      this.renderEdgeDefs(nodes);
       const orthogonal = this.routeStyle === "orthogonal";
       const geos = /* @__PURE__ */ new Map();
-      const routePaths = /* @__PURE__ */ new Map();
-      let routes = null;
+      const paths = /* @__PURE__ */ new Map();
+      let hops = null;
+      let orthHops = null;
+      if (!this.viewDoc) return { obstacles, geos, paths, hops, orthHops };
       if (orthogonal) {
-        routes = this.buildOrthogonalRoutes(routeObstacles, soft);
-        for (const [id, route] of routes) routePaths.set(id, pathMetrics(route.points));
+        const routes = this.buildOrthogonalRoutes(routeObstacles, soft);
+        for (const [id, route] of routes) paths.set(id, pathMetrics(route.points));
+        orthHops = computePolylineHops(this.viewDoc.edges, routes);
       } else {
+        this.buildCurveRoutes(routeObstacles, soft);
         for (const edge of this.viewDoc.edges) {
-          const geo = this.edgeGeometryOf(edge, routeObstacles);
-          if (geo) geos.set(edge.id, geo);
+          const geo = this.edgeGeometryOf(edge, routeObstacles, soft);
+          if (!geo) continue;
+          geos.set(edge.id, geo);
+          paths.set(edge.id, pathMetrics(sampleEdgePath(geo, 96)));
         }
+        hops = computeHops(this.viewDoc.edges, geos);
       }
-      const hops = orthogonal ? null : computeHops(this.viewDoc.edges, geos);
-      const orthHops = routes ? computePolylineHops(this.viewDoc.edges, routes) : null;
-      const foreign = this.foreignMarks(routePaths);
+      return { obstacles, geos, paths, hops, orthHops };
+    }
+    renderEdges() {
+      if (!this.doc || !this.viewDoc) return;
+      const orthogonal = this.routeStyle === "orthogonal";
+      const geometry = this.routeGeometry();
+      this.edgePaths = geometry.paths;
+      const nodes = this.nodeMap();
+      this.renderEdgeDefs(nodes);
+      const foreign = this.foreignMarks(geometry.paths);
       let paintIndex = 0;
       for (const edge of this.viewDoc.edges) {
-        const path = routePaths.get(edge.id);
-        const geo = geos.get(edge.id);
-        if (orthogonal ? !path : !geo) continue;
+        const path = geometry.paths.get(edge.id);
+        const geo = geometry.geos.get(edge.id);
+        if (!path || !orthogonal && !geo) continue;
         const style = edgeKindStyle(edge.kind);
         const dash = edge.dash === null ? style.dash ?? "" : edge.dash ? "6 4" : "";
-        const detour = geo?.detour;
-        const d = orthogonal ? polylinePath(path.points, orthHops?.get(edge.id)) : detour ? polylinePath(detour) : edgePath(geo, hops.get(edge.id));
-        const start = orthogonal ? path.points[0] : geo.p1;
-        const end = orthogonal ? path.points[path.points.length - 1] : geo.p2;
+        const d = orthogonal ? polylinePath(path.points, geometry.orthHops?.get(edge.id)) : edgePath(geo, geometry.hops?.get(edge.id));
+        const start = path.points[0];
+        const end = path.points[path.points.length - 1];
         const paint = this.edgePaint(edge, start, end, nodes, paintIndex++);
         const arrowKind = nodes.get(edge.to)?.kind ?? "ext";
         const group = el("g", { class: "bml-edge", "data-id": edge.id });
@@ -3402,20 +3965,21 @@ var BlockML = (() => {
         const font = `500 10.5px ${getComputedStyle(this.root).fontFamily}`;
         const shown = truncate(labelText, font, 260);
         const width = shown ? textWidth(shown, font) : 0;
-        const labelPath = path ?? (detour ? pathMetrics(detour) : void 0);
-        const placed = labelPath ? placeLabelOnPath(
-          labelPath,
-          width,
-          17,
-          obstacles,
-          this.placedLabels,
-          path ? this.bundleLabelRange(path, edge.id) : void 0,
-          foreign.get(edge.id)
-        ) : placeLabel(geo, width, 17, obstacles, this.placedLabels);
-        this.placedLabels.push(placed.rect);
-        edge.__labelT = placed.t;
-        edge.__labelOff = placed.offset;
+        let t = 0.5;
+        let offset = 0;
         if (shown) {
+          const range = orthogonal ? this.bundleLabelRange(path, edge.id) : this.curveBundleLabelRange(geo, edge.id);
+          const placed = placeLabelOnPath(
+            path,
+            width,
+            17,
+            geometry.obstacles,
+            this.placedLabels,
+            { range, avoid: foreign.get(edge.id) }
+          );
+          this.placedLabels.push(placed.rect);
+          t = placed.t;
+          offset = placed.offset;
           el("rect", {
             x: placed.x - width / 2 - 5,
             y: placed.y - 8.5,
@@ -3433,6 +3997,8 @@ var BlockML = (() => {
           text.textContent = shown;
         }
         this.labelLayer.appendChild(labelGroup);
+        edge.__labelT = t;
+        edge.__labelOff = offset;
         const onDown = (event) => {
           if (event.button !== 0) return;
           event.stopPropagation();
@@ -3551,7 +4117,7 @@ var BlockML = (() => {
         if (event.button !== 0) return;
         const target = event.target;
         if (target.closest(".bml-node") || target.closest(".bml-edge")) return;
-        if (event.shiftKey && this.viewDoc && !this.options.readOnly) {
+        if (event.shiftKey && this.viewDoc && !this.options.readOnly && this.mode === "editing") {
           event.preventDefault();
           this.selectEdge(null);
           this.startMarquee(event);
@@ -3658,7 +4224,7 @@ var BlockML = (() => {
     };
     startNodeDrag(event, node) {
       if (event.button !== 0) return;
-      if (this.options.readOnly) return;
+      if (this.options.readOnly || this.mode !== "editing") return;
       event.stopPropagation();
       const additive = event.shiftKey || event.ctrlKey || event.metaKey;
       if (!this.selectedNodes.has(node.id)) {
@@ -3673,9 +4239,6 @@ var BlockML = (() => {
       const moving = this.viewDoc?.nodes.filter((n) => this.selectedNodes.has(n.id) && n.at) ?? [];
       if (!moving.length) return;
       const origins = new Map(moving.map((n) => [n.id, { x: n.at.x, y: n.at.y }]));
-      const affected = this.viewDoc?.edges.filter(
-        (e) => this.selectedNodes.has(e.from) || this.selectedNodes.has(e.to)
-      ) ?? [];
       const movingBoxes = moving.map((n) => boxOf(n));
       const movingIds = new Set(moving.map((n) => n.id));
       const targets = (this.viewDoc?.nodes ?? []).filter((n) => n.at && !movingIds.has(n.id)).map((n) => boxOf(n));
@@ -3706,12 +4269,7 @@ var BlockML = (() => {
           this.nodeEls.get(n.id)?.setAttribute("transform", `translate(${x} ${y})`);
         }
         if (!moved) return;
-        if (this.routeStyle === "orthogonal") {
-          this.refreshEdgePaths();
-        } else {
-          for (const edge of affected) this.refreshEdge(edge);
-          this.refreshEdgePaths();
-        }
+        this.refreshEdgePaths();
         this.refreshGroups();
       };
       const onUp = () => {
@@ -3748,8 +4306,9 @@ var BlockML = (() => {
       this.guideLayer.replaceChildren();
     }
     startBendDrag(event, edge) {
-      if (event.button !== 0 || this.options.readOnly) return;
+      if (event.button !== 0 || this.options.readOnly || this.mode !== "editing") return;
       if (this.routeStyle === "orthogonal") return;
+      if (this.junctions.has(edge.id)) return;
       event.stopPropagation();
       const start = this.toWorld(event.clientX, event.clientY);
       const base = edge.via ?? { x: 0, y: 0 };
@@ -3760,7 +4319,6 @@ var BlockML = (() => {
           x: Math.round(origin.x + (p.x - start.x)),
           y: Math.round(origin.y + (p.y - start.y))
         };
-        this.refreshEdge(edge);
         this.refreshEdgePaths();
         this.refreshBendHandle();
       };
@@ -3773,44 +4331,28 @@ var BlockML = (() => {
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
     }
-    /** Rebuild every edge path; hops depend on where edges cross each other. */
+    /** Rebuild every edge path; ports, labels and hops all follow node positions. */
     refreshEdgePaths() {
       if (!this.viewDoc) return;
-      if (this.routeStyle === "orthogonal") {
-        const obstacles = this.collectObstacles();
-        const routes = this.buildOrthogonalRoutes(obstacles.routes, obstacles.soft);
-        const hops2 = computePolylineHops(this.viewDoc.edges, routes);
-        for (const edge of this.viewDoc.edges) {
-          const els = this.edgeEls.get(edge.id);
-          const route = routes.get(edge.id);
-          if (!els || !route) continue;
-          const d = polylinePath(route.points, hops2.get(edge.id));
-          els.line.setAttribute("d", d);
-          els.hit.setAttribute("d", d);
-          this.placeEdgeLabel(edge, pathMetrics(route.points));
-        }
-        return;
-      }
-      const routeObstacles = this.collectObstacles().routes;
-      const geos = /* @__PURE__ */ new Map();
-      for (const edge of this.viewDoc.edges) {
-        const geo = this.edgeGeometryOf(edge, routeObstacles);
-        if (geo) geos.set(edge.id, geo);
-      }
-      const hops = computeHops(this.viewDoc.edges, geos);
+      const geometry = this.routeGeometry();
+      this.edgePaths = geometry.paths;
+      const orthogonal = this.routeStyle === "orthogonal";
       for (const edge of this.viewDoc.edges) {
         const els = this.edgeEls.get(edge.id);
-        const geo = geos.get(edge.id);
-        if (!els || !geo) continue;
-        const d = edgePath(geo, hops.get(edge.id));
+        const path = geometry.paths.get(edge.id);
+        const geo = geometry.geos.get(edge.id);
+        if (!els || !path || !orthogonal && !geo) continue;
+        const d = orthogonal ? polylinePath(path.points, geometry.orthHops?.get(edge.id)) : edgePath(geo, geometry.hops?.get(edge.id));
         els.line.setAttribute("d", d);
         els.hit.setAttribute("d", d);
-        if (geo.detour) this.placeEdgeLabel(edge, pathMetrics(geo.detour));
+        this.placeEdgeLabel(edge, path);
       }
     }
     placeEdgeLabel(edge, path) {
       const els = this.edgeEls.get(edge.id);
       if (!els) return;
+      const labelPath = path ?? this.edgePaths.get(edge.id);
+      if (!labelPath) return;
       const family = getComputedStyle(this.root).fontFamily;
       const font = `500 10.5px ${family}`;
       const text = truncate(edge.label ?? edge.title ?? "", font, 260);
@@ -3818,37 +4360,7 @@ var BlockML = (() => {
       const width = textWidth(text, font);
       const t = edge.__labelT ?? 0.5;
       const off = edge.__labelOff ?? 0;
-      const point = pointAtLength(path, t * path.total);
-      const bg = els.labelLayer.querySelector(".bml-edge-label-bg");
-      const label = els.labelLayer.querySelector(".bml-edge-label");
-      if (bg) {
-        bg.setAttribute("x", String(point.x - width / 2 - 5));
-        bg.setAttribute("y", String(point.y + off - 8.5));
-      }
-      if (label) {
-        label.setAttribute("x", String(point.x));
-        label.setAttribute("y", String(point.y + off + 3.6));
-      }
-    }
-    refreshEdge(edge) {
-      const els = this.edgeEls.get(edge.id);
-      const geo = this.edgeGeometryOf(edge, this.collectObstacles().routes);
-      if (!els || !geo) return;
-      const d = edgePath(geo);
-      els.line.setAttribute("d", d);
-      els.hit.setAttribute("d", d);
-      if (geo.detour) {
-        this.placeEdgeLabel(edge, pathMetrics(geo.detour));
-        return;
-      }
-      const family = getComputedStyle(this.root).fontFamily;
-      const font = `500 10.5px ${family}`;
-      const text = truncate(edge.label ?? edge.title ?? "", font, 260);
-      if (!text) return;
-      const width = textWidth(text, font);
-      const t = edge.__labelT ?? 0.5;
-      const off = edge.__labelOff ?? 0;
-      const point = bezierAt(geo.p1, geo.control, geo.p2, t);
+      const point = pointAtLength(labelPath, t * labelPath.total);
       const bg = els.labelLayer.querySelector(".bml-edge-label-bg");
       const label = els.labelLayer.querySelector(".bml-edge-label");
       if (bg) {
@@ -3958,7 +4470,7 @@ var BlockML = (() => {
     }
     updateAlignBar() {
       const selected = this.selectedVisibleNodes();
-      const open = !this.options.readOnly && selected.length >= 2;
+      const open = this.mode === "editing" && !this.options.readOnly && selected.length >= 2;
       this.alignBar.classList.toggle("bml-open", open);
       if (!open) return;
       const count = this.alignBar.querySelector(".bml-align-count");
@@ -4017,15 +4529,14 @@ var BlockML = (() => {
     }
     refreshBendHandle() {
       this.overlayLayer.innerHTML = "";
-      if (this.routeStyle === "orthogonal" || !this.selectedEdge || !this.doc) return;
+      if (this.mode !== "editing" || this.routeStyle === "orthogonal" || !this.selectedEdge || !this.doc) {
+        return;
+      }
       const edge = this.doc.edges.find((e) => e.id === this.selectedEdge);
       if (!edge) return;
-      const geo = this.edgeGeometryOf(edge, this.collectObstacles().routes);
-      if (!geo || geo.detour) return;
-      el("path", {
-        d: `M ${geo.mid.x} ${geo.mid.y} L ${geo.control.x} ${geo.control.y}`,
-        class: "bml-bend-line"
-      }, this.overlayLayer);
+      const { routes, soft } = this.collectObstacles();
+      const geo = this.edgeGeometryOf(edge, routes, soft);
+      if (!geo || geo.detour || this.junctions.has(edge.id)) return;
       const handle = el("circle", {
         cx: geo.control.x,
         cy: geo.control.y,
@@ -4083,9 +4594,9 @@ var BlockML = (() => {
       const sections = [];
       if (edge.note) sections.push(`<h3>\u8BF4\u660E</h3><p>${escape(edge.note)}</p>`);
       if (edge.src) sections.push(`<h3>\u51FA\u5904</h3><p><code>${escape(edge.src)}</code></p>`);
-      if (!this.options.readOnly) {
+      if (!this.options.readOnly && this.mode === "editing") {
         sections.push(
-          this.routeStyle === "orthogonal" ? `<h3>\u8D70\u7EBF</h3><p>\u6B63\u4EA4\u5E03\u7EBF\u7531\u8282\u70B9\u4F4D\u7F6E\u81EA\u52A8\u751F\u6210\uFF08\u76F4\u89D2\u6298\u7EBF\uFF09\uFF0C\u62D6\u52A8\u8282\u70B9\u5373\u53EF\u8C03\u6574\u3002</p>` : `<h3>\u8C03\u6574\u8D70\u7EBF</h3><p>\u62D6\u52A8\u753B\u5E03\u4E0A\u7684\u5706\u70B9\u6539\u53D8\u66F2\u7387\uFF0C\u5750\u6807\u4F1A\u5199\u56DE\u6587\u4EF6\u91CC\u7684 <code>via</code>\u3002</p>`
+          this.routeStyle === "orthogonal" ? `<h3>\u8D70\u7EBF</h3><p>\u6B63\u4EA4\u8D70\u7EBF\u7531\u8282\u70B9\u4F4D\u7F6E\u81EA\u52A8\u751F\u6210\uFF1B\u7AEF\u53E3\u4E0E\u51FA\u7EBF\u65B9\u5411\u7531\u5E73\u53F0\u7EDF\u4E00\u51B3\u5B9A\u3002</p>` : this.junctions.has(edge.id) ? `<h3>\u8D70\u7EBF</h3><p>\u8FD9\u6761\u8FB9\u5C5E\u4E8E <code>bundle</code>\uFF0C\u5171\u4EAB\u4E3B\u5E72\u7531\u7EC4\u5185\u8FDE\u7EBF\u5171\u540C\u51B3\u5B9A\u3002</p>` : `<h3>\u8C03\u6574\u8D70\u7EBF</h3><p>\u62D6\u52A8\u66F2\u7EBF\u4E2D\u70B9\u6539\u53D8\u66F2\u7387\uFF0C\u5750\u6807\u4F1A\u5199\u56DE\u6587\u4EF6\u91CC\u7684 <code>via</code>\uFF1B\u51FA\u7EBF\u65B9\u5411\u4E0E\u7AEF\u53E3\u7531\u5E73\u53F0\u7EDF\u4E00\u51B3\u5B9A\u3002</p>`
         );
       }
       this.inspector.innerHTML = `
@@ -4123,6 +4634,7 @@ var BlockML = (() => {
     }
     /* ----------------------------------------------------------- visibility */
     toggleLayers(open = !this.layersOpen) {
+      if (this.mode !== "editing") return;
       this.layersOpen = open;
       this.layersPanel.classList.toggle("bml-open", open);
       if (open) this.renderLayersPanel();
@@ -4291,6 +4803,22 @@ var BlockML = (() => {
       this.root.classList.toggle("bml-readonly", readOnly);
       this.updateAlignBar();
     }
+    setMode(mode) {
+      if (this.mode === mode) return;
+      this.mode = mode;
+      this.root.classList.toggle("bml-presentation", mode === "presentation");
+      this.root.classList.toggle("bml-editing", mode === "editing");
+      if (mode === "presentation") {
+        this.toggleLayers(false);
+        this.layersOpen = false;
+        this.layersPanel.classList.remove("bml-open");
+        this.overlayLayer.innerHTML = "";
+      }
+      this.render();
+    }
+    getMode() {
+      return this.mode;
+    }
     toSVG() {
       const clone = this.svg.cloneNode(true);
       clone.setAttribute("xmlns", SVGNS);
@@ -4355,46 +4883,6 @@ ${darkRules}`;
       this.root.remove();
     }
   };
-  function rectOverlapArea(a, b, pad) {
-    const x0 = Math.max(a.x, b.x - pad);
-    const y0 = Math.max(a.y, b.y - pad);
-    const x1 = Math.min(a.x + a.w, b.x + b.w + pad);
-    const y1 = Math.min(a.y + a.h, b.y + b.h + pad);
-    return Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
-  }
-  function labelPenalty(rect, obstacles, placed) {
-    let penalty = 0;
-    for (const o of obstacles) penalty += rectOverlapArea(rect, o, 1) * 4;
-    for (const o of placed) penalty += rectOverlapArea(rect, o, 4);
-    return penalty;
-  }
-  function placeLabel(geo, width, height, obstacles, placed) {
-    const ts = [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74, 0.18, 0.82];
-    const offsets = [0, -15, 15, -30, 30, -46, 46, -64, 64];
-    let best = null;
-    let bestPenalty = Infinity;
-    for (const offset of offsets) {
-      for (const t of ts) {
-        const point2 = bezierAt(geo.p1, geo.control, geo.p2, t);
-        const rect = { x: point2.x - width / 2 - 5, y: point2.y - height / 2 + offset, w: width + 10, h: height };
-        const penalty = labelPenalty(rect, obstacles, placed);
-        if (penalty === 0) return { x: point2.x, y: point2.y + offset, t, offset, rect };
-        if (penalty < bestPenalty) {
-          bestPenalty = penalty;
-          best = { x: point2.x, y: point2.y + offset, t, offset, rect };
-        }
-      }
-    }
-    if (best) return best;
-    const point = bezierAt(geo.p1, geo.control, geo.p2, 0.5);
-    return {
-      x: point.x,
-      y: point.y,
-      t: 0.5,
-      offset: 0,
-      rect: { x: point.x - width / 2 - 5, y: point.y - height / 2, w: width + 10, h: height }
-    };
-  }
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
   }
@@ -4407,234 +4895,6 @@ ${darkRules}`;
     const g = mix(value >> 8 & 255);
     const b = mix(value & 255);
     return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
-  }
-  var HOP_RADIUS = 9;
-  var HOP_MIN_T = 0.05;
-  var HOP_MAX_T = 0.95;
-  function splitQuad(p1, c, p2, t) {
-    const lerp = (a, b) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
-    const p01 = lerp(p1, c);
-    const p12 = lerp(c, p2);
-    const p012 = lerp(p01, p12);
-    return { left: [p1, p01, p012], right: [p012, p12, p2] };
-  }
-  function subQuad(p1, c, p2, t0, t1) {
-    const { left } = splitQuad(p1, c, p2, t1);
-    const k = t1 <= 0 ? 0 : t0 / t1;
-    const { right } = splitQuad(left[0], left[1], left[2], k);
-    return right;
-  }
-  function quadSpeed(geo, t) {
-    const dx = 2 * (1 - t) * (geo.control.x - geo.p1.x) + 2 * t * (geo.p2.x - geo.control.x);
-    const dy = 2 * (1 - t) * (geo.control.y - geo.p1.y) + 2 * t * (geo.p2.y - geo.control.y);
-    return Math.hypot(dx, dy);
-  }
-  function sampleEdge(geo, steps = 40) {
-    const points = [];
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (let i = 0; i <= steps; i++) {
-      const p = bezierAt(geo.p1, geo.control, geo.p2, i / steps);
-      points.push(p);
-      x0 = Math.min(x0, p.x);
-      y0 = Math.min(y0, p.y);
-      x1 = Math.max(x1, p.x);
-      y1 = Math.max(y1, p.y);
-    }
-    return { points, box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } };
-  }
-  function segmentHit(a1, a2, b1, b2) {
-    const ax = a2.x - a1.x, ay = a2.y - a1.y;
-    const bx = b2.x - b1.x, by = b2.y - b1.y;
-    const denom = ax * by - ay * bx;
-    if (Math.abs(denom) < 1e-9) return null;
-    const ox = b1.x - a1.x, oy = b1.y - a1.y;
-    const ua = (ox * by - oy * bx) / denom;
-    const ub = (ox * ay - oy * ax) / denom;
-    if (ua <= 0 || ua >= 1 || ub <= 0 || ub >= 1) return null;
-    return ub;
-  }
-  function computeHops(edges, geos) {
-    const samples = /* @__PURE__ */ new Map();
-    for (const edge of edges) {
-      const geo = geos.get(edge.id);
-      if (geo && !geo.detour) samples.set(edge.id, sampleEdge(geo));
-    }
-    const hops = /* @__PURE__ */ new Map();
-    for (let i = 0; i < edges.length; i++) {
-      const first = edges[i];
-      const a = samples.get(first.id);
-      if (!a) continue;
-      for (let j = i + 1; j < edges.length; j++) {
-        const second = edges[j];
-        const b = samples.get(second.id);
-        if (!b) continue;
-        if (a.box.x + a.box.w < b.box.x || b.box.x + b.box.w < a.box.x || a.box.y + a.box.h < b.box.y || b.box.y + b.box.h < a.box.y) continue;
-        const shares = first.from === second.from || first.from === second.to || first.to === second.from || first.to === second.to;
-        const found = [];
-        for (let s = 0; s < a.points.length - 1; s++) {
-          for (let k = 0; k < b.points.length - 1; k++) {
-            const ub = segmentHit(a.points[s], a.points[s + 1], b.points[k], b.points[k + 1]);
-            if (ub === null) continue;
-            const t = (k + ub) / (b.points.length - 1);
-            if (shares && (t < 0.12 || t > 0.88)) continue;
-            found.push(t);
-          }
-        }
-        if (found.length) hops.set(second.id, [...hops.get(second.id) ?? [], ...found]);
-      }
-    }
-    return hops;
-  }
-  function edgePath(geo, hops) {
-    if (geo.detour?.length) return polylinePath(geo.detour);
-    if (!hops?.length) return pathOf(geo);
-    const usable = [];
-    for (const t of [...hops].sort((a, b) => a - b)) {
-      if (t < HOP_MIN_T || t > HOP_MAX_T) continue;
-      const p = bezierAt(geo.p1, geo.control, geo.p2, t);
-      if (Math.hypot(p.x - geo.p1.x, p.y - geo.p1.y) < 22) continue;
-      if (Math.hypot(p.x - geo.p2.x, p.y - geo.p2.y) < 22) continue;
-      if (usable.length) {
-        const prev = bezierAt(geo.p1, geo.control, geo.p2, usable[usable.length - 1]);
-        if (Math.hypot(p.x - prev.x, p.y - prev.y) < 18) continue;
-      }
-      usable.push(t);
-    }
-    if (!usable.length) return pathOf(geo);
-    const f = (n) => Number(n.toFixed(2));
-    const pointAt = (t) => bezierAt(geo.p1, geo.control, geo.p2, t);
-    let d = "";
-    let cursor = 0;
-    for (const t of usable) {
-      const half = Math.min(0.06, 7 / Math.max(quadSpeed(geo, t), 1e-3));
-      const t0 = Math.max(cursor, t - half);
-      const t1 = Math.min(1, t + half);
-      if (t1 - t0 < 4e-3) continue;
-      const [s0, s1, s2] = subQuad(geo.p1, geo.control, geo.p2, cursor, t0);
-      d += d ? ` Q ${f(s1.x)} ${f(s1.y)} ${f(s2.x)} ${f(s2.y)}` : `M ${f(s0.x)} ${f(s0.y)} Q ${f(s1.x)} ${f(s1.y)} ${f(s2.x)} ${f(s2.y)}`;
-      const b = pointAt(t1);
-      d += ` A ${HOP_RADIUS} ${HOP_RADIUS} 0 0 1 ${f(b.x)} ${f(b.y)}`;
-      cursor = t1;
-    }
-    const [, e1, e2] = subQuad(geo.p1, geo.control, geo.p2, cursor, 1);
-    return `${d} Q ${f(e1.x)} ${f(e1.y)} ${f(e2.x)} ${f(e2.y)}`;
-  }
-  function pathMetrics(points) {
-    const lengths = [0];
-    let total = 0;
-    for (let i = 1; i < points.length; i++) {
-      const a = points[i - 1];
-      const b = points[i];
-      total += Math.hypot(b.x - a.x, b.y - a.y);
-      lengths.push(total);
-    }
-    return { points, lengths, total };
-  }
-  function pointAtLength(path, distance) {
-    const s = Math.max(0, Math.min(path.total, distance));
-    for (let i = 1; i < path.points.length; i++) {
-      if (path.lengths[i] >= s) {
-        const segStart = path.lengths[i - 1];
-        const k = (s - segStart) / Math.max(path.lengths[i] - segStart, 1e-6);
-        const a = path.points[i - 1];
-        const b = path.points[i];
-        return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
-      }
-    }
-    return path.points[path.points.length - 1];
-  }
-  var CORNER_RADIUS = 12;
-  function polylinePath(points, hops) {
-    const f = (n) => Number(n.toFixed(2));
-    if (points.length < 2) return "";
-    const path = pathMetrics(points);
-    const radiusAt = (index) => {
-      if (index <= 0 || index >= points.length - 1) return 0;
-      const prev = path.lengths[index] - path.lengths[index - 1];
-      const next = path.lengths[index + 1] - path.lengths[index];
-      if (prev < 2 || next < 2) return 0;
-      return Math.min(CORNER_RADIUS, prev / 2, next / 2);
-    };
-    const at = (distance) => {
-      const s = Math.max(0, Math.min(path.total, distance));
-      for (let i = 1; i < points.length; i++) {
-        const end = path.lengths[i];
-        if (end >= s - 1e-6) {
-          const a = points[i - 1];
-          const b = points[i];
-          const len = end - path.lengths[i - 1];
-          const k = len < 1e-6 ? 0 : (s - path.lengths[i - 1]) / len;
-          return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
-        }
-      }
-      return points[points.length - 1];
-    };
-    const cuts = [];
-    if (hops?.length) {
-      for (const t of [...hops].sort((a, b) => a - b)) {
-        const s = t * path.total;
-        if (s < 22 || s > path.total - 22) continue;
-        if (cuts.length && s - cuts[cuts.length - 1] < 18) continue;
-        cuts.push(s);
-      }
-    }
-    let d = `M ${f(points[0].x)} ${f(points[0].y)}`;
-    let cut = 0;
-    for (let i = 1; i < points.length; i++) {
-      const segStart = path.lengths[i - 1];
-      const segEnd = path.lengths[i];
-      const endR = radiusAt(i);
-      while (cut < cuts.length && cuts[cut] <= segEnd) {
-        const s = cuts[cut];
-        if (s >= segStart + radiusAt(i - 1) + 9 && s <= segEnd - endR - 9) {
-          const from = at(s - 7);
-          const to = at(s + 7);
-          d += ` L ${f(from.x)} ${f(from.y)} A 7 7 0 0 1 ${f(to.x)} ${f(to.y)}`;
-        }
-        cut++;
-      }
-      const end = at(segEnd - endR);
-      d += ` L ${f(end.x)} ${f(end.y)}`;
-      if (endR > 0) {
-        const corner = points[i];
-        const after = at(segEnd + endR);
-        d += ` Q ${f(corner.x)} ${f(corner.y)} ${f(after.x)} ${f(after.y)}`;
-      }
-    }
-    return d;
-  }
-  function computePolylineHops(edges, routes) {
-    const paths = /* @__PURE__ */ new Map();
-    for (const edge of edges) {
-      const route = routes.get(edge.id);
-      if (route) paths.set(edge.id, pathMetrics(route.points));
-    }
-    const hops = /* @__PURE__ */ new Map();
-    for (let i = 0; i < edges.length; i++) {
-      const first = edges[i];
-      const a = paths.get(first.id);
-      if (!a) continue;
-      for (let j = i + 1; j < edges.length; j++) {
-        const second = edges[j];
-        const b = paths.get(second.id);
-        if (!b) continue;
-        const shares = first.from === second.from || first.from === second.to || first.to === second.from || first.to === second.to;
-        const found = [];
-        for (let s = 0; s < a.points.length - 1; s++) {
-          for (let k = 0; k < b.points.length - 1; k++) {
-            const ub = segmentHit(a.points[s], a.points[s + 1], b.points[k], b.points[k + 1]);
-            if (ub === null) continue;
-            const distance = b.lengths[k] + ub * (b.lengths[k + 1] - b.lengths[k]);
-            const t = b.total ? distance / b.total : 0;
-            if (t < HOP_MIN_T || t > HOP_MAX_T) continue;
-            if (shares && (t < 0.12 || t > 0.88)) continue;
-            found.push(t);
-          }
-        }
-        if (found.length) hops.set(second.id, [...hops.get(second.id) ?? [], ...found]);
-      }
-    }
-    return hops;
   }
   function segmentOverlapLength(a1, a2, b1, b2) {
     const aHorizontal = Math.abs(a1.y - a2.y) < 0.5;
@@ -4701,74 +4961,6 @@ ${darkRules}`;
     }
     return null;
   }
-  function placeLabelOnPath(path, width, height, obstacles, placed, range, avoid) {
-    const candidates = [];
-    const seen = /* @__PURE__ */ new Set();
-    const push = (t, offset) => {
-      const key = `${t.toFixed(3)}:${offset}`;
-      if (!t || t <= 0 || t >= 1 || seen.has(key)) return;
-      seen.add(key);
-      candidates.push({ t, offset });
-    };
-    const inRange = (t) => !range || t >= range[0] && t <= range[1];
-    const pad = (width / 2 + 6) / Math.max(1, path.total);
-    const avoided = (t) => {
-      if (!avoid) return false;
-      const last = avoid.length - 1;
-      const lo = Math.max(0, Math.round((t - pad) * last));
-      const hi = Math.min(last, Math.round((t + pad) * last));
-      for (let i = lo; i <= hi; i++) if (avoid[i]) return true;
-      return false;
-    };
-    const runs = [];
-    for (let i = 0; i < path.points.length - 1; i++) {
-      const a = path.points[i];
-      const b = path.points[i + 1];
-      const length = Math.hypot(b.x - a.x, b.y - a.y);
-      if (length < width + 18) continue;
-      const mid = path.lengths[i] + length / 2;
-      runs.push({ t: path.total ? mid / path.total : 0, length, horizontal: Math.abs(a.y - b.y) < 0.5 });
-    }
-    runs.sort((a, b) => Number(b.horizontal) - Number(a.horizontal) || b.length - a.length);
-    for (const run of runs) {
-      if (!inRange(run.t) || avoided(run.t)) continue;
-      push(run.t, -12);
-      push(run.t, 14);
-    }
-    const ts = [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74, 0.18, 0.82];
-    const offsets = [0, -15, 15, -30, 30, -46, 46, -64, 64];
-    for (const offset of offsets) for (const t of ts) if (inRange(t) && !avoided(t)) push(t, offset);
-    if (!candidates.length) {
-      for (const offset of offsets) for (const t of ts) if (inRange(t)) push(t, offset);
-    }
-    if (!candidates.length) for (const offset of offsets) for (const t of ts) push(t, offset);
-    let best = null;
-    let bestPenalty = Infinity;
-    for (const { t, offset } of candidates) {
-      const point2 = pointAtLength(path, t * path.total);
-      const rect = {
-        x: point2.x - width / 2 - 5,
-        y: point2.y - height / 2 + offset,
-        w: width + 10,
-        h: height
-      };
-      const penalty = labelPenalty(rect, obstacles, placed);
-      if (penalty === 0) return { x: point2.x, y: point2.y + offset, t, offset, rect };
-      if (penalty < bestPenalty) {
-        bestPenalty = penalty;
-        best = { x: point2.x, y: point2.y + offset, t, offset, rect };
-      }
-    }
-    if (best) return best;
-    const point = pointAtLength(path, path.total * 0.5);
-    return {
-      x: point.x,
-      y: point.y,
-      t: 0.5,
-      offset: 0,
-      rect: { x: point.x - width / 2 - 5, y: point.y - height / 2, w: width + 10, h: height }
-    };
-  }
   function escape(text) {
     return String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
@@ -4793,6 +4985,10 @@ ${darkRules}`;
     const title = options.title ?? "BlockML";
     const theme = options.theme ?? "light";
     const readOnly = options.readOnly ?? false;
+    const mode = options.mode ?? "presentation";
+    const routeOption = options.route ? `,
+    route: "${options.route}"` : "";
+    const modeButton = readOnly ? "" : `<button data-act="mode" title="\u5207\u6362\u7F16\u8F91 / \u9884\u89C8">${mode === "presentation" ? "\u7F16\u8F91" : "\u9884\u89C8"}</button>`;
     const script = options.viewerScript.replace(/<\/script/gi, "<\\/script");
     const sourceJson = jsonForScript(options.source);
     const visibilityJson = options.visibility ? jsonForScript(options.visibility) : null;
@@ -4813,6 +5009,7 @@ ${darkRules}`;
     border-bottom:1px solid ${theme === "dark" ? "#1e293b" : "#e2e8f0"};
     backdrop-filter:blur(8px);
   }
+  #blockml-app[data-mode="presentation"] .bml-editing-only{display:none}
   #blockml-bar .grow{flex:1}
   #blockml-bar .name{font-weight:650;color:${theme === "dark" ? "#e2e8f0" : "#0f172a"};font-size:12.5px}
   #blockml-bar .badge{font:500 10px/1 ui-monospace,monospace;padding:3px 6px;border-radius:5px;
@@ -4840,13 +5037,14 @@ ${options.viewerCss}
 </style>
 </head>
 <body>
-<div id="blockml-app">
+<div id="blockml-app" data-mode="${mode}">
   <div id="blockml-bar">
     <span class="name">${escapeHtml(title)}</span>
     <span class="badge">.blockml</span>
     <span class="grow"></span>
-    <button data-act="layers" title="\u663E\u793A / \u9690\u85CF\u5206\u7EC4\u4E0E\u8282\u70B9">\u56FE\u5C42</button>
-    <select id="blockml-layout" title="\u91CD\u65B0\u6392\u5217\uFF08\u4F1A\u8986\u76D6\u624B\u5DE5\u5750\u6807\uFF09">
+    ${modeButton}
+    <button data-act="layers" class="bml-editing-only" title="\u663E\u793A / \u9690\u85CF\u5206\u7EC4\u4E0E\u8282\u70B9">\u56FE\u5C42</button>
+    <select id="blockml-layout" class="bml-editing-only" title="\u91CD\u65B0\u6392\u5217\uFF08\u4F1A\u8986\u76D6\u624B\u5DE5\u5750\u6807\uFF09">
       <option value="">\u624B\u5DE5\u5E03\u5C40</option>
       <option value="layered">\u4ECE\u5DE6\u5230\u53F3</option>
       <option value="pipeline">Pipeline</option>
@@ -4869,7 +5067,8 @@ ${visibilityJson ? `<script id="blockml-visibility" type="application/json">${vi
   var handle = BlockML.mount(document.getElementById("blockml-mount"), {
     source: source,
     theme: "${theme}",
-    readOnly: ${readOnly}
+    mode: "${mode}",
+    readOnly: ${readOnly}${routeOption}
   });
   var initialEl = document.getElementById("blockml-visibility");
   if (initialEl) {
@@ -4881,8 +5080,16 @@ ${visibilityJson ? `<script id="blockml-visibility" type="application/json">${vi
   // Expose the handle for debugging and for embedding pages that want to script it.
   window.blockmlViewer = handle;
   window.__blockmlGetSource = function(){ return handle.getSource(); };
+  var app = document.getElementById("blockml-app");
   var actions = {
     "fit": function(){ handle.fit(); },
+    "mode": function(){
+      var next = handle.getMode() === "presentation" ? "editing" : "presentation";
+      handle.setMode(next);
+      app.setAttribute("data-mode", next);
+      var button = document.querySelector('[data-act="mode"]');
+      if (button) button.textContent = next === "presentation" ? "\u7F16\u8F91" : "\u9884\u89C8";
+    },
     "layers": function(){ handle.toggleLayers(); },
     "zoom-in": function(){ handle.zoomTo(handle.getView().k * 1.25); },
     "zoom-out": function(){ handle.zoomTo(handle.getView().k / 1.25); },
@@ -4921,6 +5128,7 @@ ${visibilityJson ? `<script id="blockml-visibility" type="application/json">${vi
   var handle = BlockML.mount(document.getElementById("blockml-mount"), {
     source: source,
     theme: "light",
+    mode: "presentation",
     readOnly: false
   });
   var initialEl = document.getElementById("blockml-visibility");
@@ -4933,8 +5141,16 @@ ${visibilityJson ? `<script id="blockml-visibility" type="application/json">${vi
   // Expose the handle for debugging and for embedding pages that want to script it.
   window.blockmlViewer = handle;
   window.__blockmlGetSource = function(){ return handle.getSource(); };
+  var app = document.getElementById("blockml-app");
   var actions = {
     "fit": function(){ handle.fit(); },
+    "mode": function(){
+      var next = handle.getMode() === "presentation" ? "editing" : "presentation";
+      handle.setMode(next);
+      app.setAttribute("data-mode", next);
+      var button = document.querySelector('[data-act="mode"]');
+      if (button) button.textContent = next === "presentation" ? "编辑" : "预览";
+    },
     "layers": function(){ handle.toggleLayers(); },
     "zoom-in": function(){ handle.zoomTo(handle.getView().k * 1.25); },
     "zoom-out": function(){ handle.zoomTo(handle.getView().k / 1.25); },

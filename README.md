@@ -1,19 +1,18 @@
 # BlockML
 
-**Diagram-as-code for architecture maps — semantics *and* layout in one text file.**
+**Diagram-as-code for architecture maps — semantics in the file, rendering quality owned by the platform.**
 
 Mermaid 和 D2 从文本算出布局，你的手动调整存不下来；draw.io 和 Excalidraw 存布局，但没法 code review。
-BlockML 把两件事放进同一个 `.blockml` 文件：写完是图，拖完还是同一份文件。
+BlockML 让作者只写语义，平台负责默认分层布局、共享端口、法线出线、标签避让与跨线跳弧；在编辑态拖完，坐标回写到同一份 `.blockml`，写完是图，拖完还是同一份文件。
 
 ```blockml
-group access "接入层" { color: #f59e0b }
-group data "数据面" { color: #10b981 }
+group access "接入层"
+group data "数据面"
 
 node gw "api-gateway" {
   group: access
   kind: service
   tech: "Spring Cloud Gateway · 8080"
-  at: 340, 40
   src: "docs/deploy.md:18-20"
 }
 
@@ -21,7 +20,6 @@ node pg "PostgreSQL" {
   group: data
   kind: db
   tech: "orders"
-  at: 1180, 260
 }
 
 edge gw -> pg "JDBC · 5 池" {
@@ -42,13 +40,15 @@ node packages/cli/bin.mjs validate examples/order-platform.blockml
 node packages/cli/bin.mjs render examples/order-platform.blockml -o out/order-platform.html
 ```
 
-产物是一个自包含 HTML：内联 CSS 和 JS、零外部依赖、内网双击即看。画布上可以直接拖节点、拖连线控制点；Shift / Ctrl 点选，或 Shift+拖拽在空白处框选多个节点（Cmd/Ctrl+A 全选），选中节点会带高亮底色，选中 ≥2 个会出现多选工具条，可纵向 / 横向对齐、水平 / 垂直等距，多选后能整组拖动；拖动时靠近其它节点的边或中线会自动吸附并画出对齐线（按住 Alt 临时关闭吸附）；连线不会穿过非端点节点（正交优先换车道、曲线先换进出边，实在绕不开才用圆角折线）；两条线交叉时上层连线在交点画一个小圆弧跳过下层；正交走线按方向分吸附点：同一侧所有入站线共用一个点、所有出站线共用另一个点，两者不重合；连线颜色从起点的节点色（浅）过渡到终点的节点色（实色），箭头取终点色，入站与出站即使在同侧也能一眼分方向；diagram 里写 `route: orthogonal` 可以切换成 draw.io 式的正交走线（圆角转折、跨线跳弧，默认 `curve` 贝塞尔）；悬停或选中节点会高亮与它相连的边；顶部下拉可以在四种排列算法之间切换；每个分组框右上角可以折叠成带计数的胶囊，「图层」面板能逐个隐藏分组或节点（只影响视图，不改源码）；改完点「下载源码」拿回带坐标的 `.blockml`。
+产物是一个自包含 HTML：内联 CSS 和 JS、零外部依赖、内网双击即看。打开默认是**演示态**——没有点阵网格、分组折叠点和连线控制点手柄，节点也不会被误拖；顶部「编辑」可切到编辑态（可在四种排列算法之间切换），点「预览」切回。画布上可以拖节点、拖连线控制点；Shift / Ctrl 点选，或 Shift+拖拽在空白处框选多个节点（Cmd/Ctrl+A 全选），选中节点会带高亮底色，选中 ≥2 个会出现多选工具条，可纵向 / 横向对齐、水平 / 垂直等距，多选后能整组拖动；拖动时靠近其它节点的边或中线会自动吸附并画出对齐线（按住 Alt 临时关闭吸附）；改完点「下载源码」拿回带坐标的 `.blockml`。
 
-仓库里有一份渲染好的示例：[`examples/order-platform.html`](examples/order-platform.html)（虚构的电商订单平台，源码同名 `.blockml`）。
+渲染质量由平台统一保证，不依赖作者手写样式：曲线与正交共用侧端口（同一侧 ≥3 条边也只有一入一出两个普通附着点，`bundle` 另占一个），每条边沿边框法线出线（偏差 ≤ 0.5°），连线不穿过非端点节点，所有交叉处画跳弧，标签中心距本边路径 ≤ 8px 且不压节点 / 分组标题 / 其它标签，适应窗口会把连线和标签一起收进来。连线颜色从起点节点色（浅）过渡到终点节点色（实色），箭头取终点色；边 kind 只决定实线 / 虚线 / 点线。悬停或选中节点会高亮与它相连的边；每个分组框右上角可以折叠成带计数的胶囊，「图层」面板能逐个隐藏分组或节点（只影响视图，不改源码）。走线风格是查看器预设：`render --route orthogonal` 切到 draw.io 式的正交走线（圆角转折、跨线跳弧），默认 `curve` 贝塞尔；不要在 `.blockml` 里写 `route:`。
+
+仓库里有一份渲染好的示例：[`examples/order-platform.html`](examples/order-platform.html)（虚构的电商订单平台，源码同名 `.blockml`，不含任何手写坐标或样式键）。
 
 ## 桌面阅读器（Tauri）
 
-`apps/desktop` 把同一套 viewer 包成原生应用：系统文件对话框、拖入打开、拖动后自动写回文件、外部修改检测、最近文件、SVG / PNG / HTML 导出（HTML 是带当前主题与图层状态的可交互单文件阅读器）、深浅主题，并注册 `.blockml` 文件关联（双击直达）。
+`apps/desktop` 把同一套 viewer 包成原生应用：系统文件对话框、拖入打开、拖动后自动写回文件、外部修改检测、最近文件、SVG / PNG / HTML 导出（HTML 是带当前主题与图层状态的可交互单文件阅读器，打开为演示态，可切到编辑态）、深浅主题，并注册 `.blockml` 文件关联（双击直达）。
 
 前置：Node 20+、pnpm、Rust 工具链（`curl https://sh.rustup.rs -sSf | sh`）。
 
@@ -80,14 +80,15 @@ pnpm --filter @block-ml/desktop tauri build   # 打包到 apps/desktop/src-tauri
 ## 语法 30 秒
 
 ```blockml
-diagram "标题" { title: "…", theme: light }   // 可选
-group <id> "标题" { color: #4f46e5 }
-node  <id> "标题" { group:, kind:, tech:, at: x, y, note:, src: }
-edge  <from> -> <to> "标签" { kind:, via: dx, dy, dash:, bundle:, note:, src: }
+diagram "标题" { title: "…", subtitle: "…" }   // 可选
+group <id> "标题"                               // 可写成一行
+node  <id> "标题" { group:, kind:, tech:, note:, src:, tags: }
+edge  <from> -> <to> "标签" { kind:, bundle:, note:, src: }
 ```
 
 - 没有属性的块可以写成一行，`{ }` 省略。
-- `at` 是节点左上角；`via` 是连线控制点相对两端点中点的偏移（仅 `route: curve` 生效）。
+- 作者只写语义；默认布局按 group 分列，坐标由平台生成。`at` / `via` / `dash` / `color` / `theme` / `route` 是编辑器回写或旧文件兼容键，新文档不写。
+- 同一侧多条边、标签避让、跳弧都由平台统一处理；`bundle` 是语义属性，两种走线都生效。
 - 未知 kind 降级 + warning；未知属性警告并忽略；`x-` 前缀字段原样保留。
 - 完整规范：[`spec/blockml-spec-v1.md`](spec/blockml-spec-v1.md)
 
@@ -96,7 +97,7 @@ edge  <from> -> <to> "标签" { kind:, via: dx, dy, dash:, bundle:, note:, src: 
 ```
 CHANGELOG.md                  版本变更记录
 spec/
-  blockml-spec-v1.md          语言规范（normative，当前 v1.1）
+  blockml-spec-v1.md          语言规范（normative，当前 v1.3）
 examples/
   order-platform.blockml      虚构的电商订单平台（可直接渲染）
   order-platform.html         渲染成品，可双击打开
@@ -117,18 +118,19 @@ skills/
 | 命令 | 作用 |
 | --- | --- |
 | `blockml validate <file...>` | 语法与引用检查，error 退出码 1 |
-| `blockml render <file> [-o out.html]` | 生成自包含阅读器 |
-| `blockml layout <file> [--algo layered\|pipeline\|snowflake\|compact] [--write]` | 用算法重排并回写 `at`（保留 `via`） |
+| `blockml render <file> [-o out.html] [--route curve\|orthogonal]` | 生成自包含阅读器（默认演示态） |
+| `blockml layout <file> [--algo layered\|pipeline\|snowflake\|compact] [--write]` | 用算法整体重排并回写 `at`（破坏性，`via` 仅兼容保留） |
 | `blockml inspect <file>` | 打印规模、kind 分布、缺坐标/缺出处的节点数 |
 | `blockml fmt <file> [--write]` | 规范化输出（会丢弃注释，默认只打印） |
 
 ## 设计约束
 
-1. **文件即事实源** —— 语义和坐标同一份文本，没有 sidecar 布局文件。
+1. **文件即事实源** —— 语义和编辑器写回的坐标同一份文本，没有 sidecar 布局文件。
 2. **可 round-trip** —— `parse → serialize → parse` 得到同一棵树。
 3. **只写改动的键** —— 拖拽只回写 `at` / `via`，注释和其它属性字节不变。
 4. **未知即降级** —— 新文件能被旧工具打开（warning，不阻断）。
 5. **零运行时依赖** —— 解析器和渲染器都不引第三方库，内网可用。
+6. **渲染质量由平台负责** —— 作者不写样式键，默认布局也必须满足端口、法线、标签、避障与跳弧契约。
 
 ## 状态
 
