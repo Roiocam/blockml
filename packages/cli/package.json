@@ -1,6 +1,6 @@
 {
   "name": "@block-ml/cli",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "BlockML command line: validate, render, fmt",
   "license": "MIT",
   "homepage": "https://github.com/Roiocam/blockml#readme",
