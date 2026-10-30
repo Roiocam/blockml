@@ -23,7 +23,7 @@ BlockML 是给架构图用的 diagram-as-code：一块文本同时描述**语义
 6. **交付**：`node <blockml-repo>/packages/cli/bin.mjs render <file> -o <out.html>`，把 HTML 路径给用户。用户拖动后的坐标会写回 `.blockml`，可再 `下载源码`；阅读器里的分组折叠与「图层」隐藏只影响视图，不写回文件。
 
 > 排列算法：`layered`（按组分层）、`pipeline`（按组声明顺序）、`snowflake`（中心放射）、`compact`（网格）。重排会覆盖手工坐标，只保留连线曲率。
-> 走线风格：`diagram { route: orthogonal }` 切到 draw.io 式正交布线（转折圆角、跨线处上层线画小圆弧、线体不重叠，`via` 不生效）；默认 `curve` 贝塞尔。
+> 走线风格：`diagram { route: orthogonal }` 切到 draw.io 式正交布线（转折圆角、跨线处上层线画小圆弧、线体不重叠；同侧入站/出站各占一个吸附点，`via` 不生效）；默认 `curve` 贝塞尔。连线颜色跟随两端节点 kind：起点浅、终点实，箭头取终点色。
 > 汇流：一个节点连同一组里的多个对端时，给这几条边加同名 `bundle: <name>`，正交走线下会画成一条主干再分叉。
 > 仓库在本地时用上面的完整路径；把 `@block-ml/cli` 装到 PATH 之后，可以直接用 `blockml validate` / `blockml render`。
 > 首次使用前先在该仓库跑一次 `pnpm install && pnpm build`，否则 `packages/*/dist` 不存在。
