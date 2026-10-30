@@ -1,6 +1,6 @@
 {
   "name": "@block-ml/viewer",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Interactive BlockML canvas: render, drag, export",
   "license": "MIT",
   "homepage": "https://github.com/Roiocam/blockml#readme",

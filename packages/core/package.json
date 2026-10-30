@@ -1,6 +1,6 @@
 {
   "name": "@block-ml/core",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "BlockML parser, validator, serializer and geometry helpers",
   "license": "MIT",
   "homepage": "https://github.com/Roiocam/blockml#readme",
