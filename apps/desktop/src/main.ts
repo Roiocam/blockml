@@ -1,9 +1,10 @@
-import { mount, type ViewerHandle } from "@block-ml/viewer";
+import { mount, renderStandaloneHTML, VIEWER_CSS, type ViewerHandle } from "@block-ml/viewer";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import viewerScript from "virtual:blockml-viewer-iife";
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -278,9 +279,8 @@ async function rasterizePng(svg: string): Promise<string> {
   }
 }
 
-async function exportAs(kind: "svg" | "png"): Promise<void> {
+async function exportAs(kind: "svg" | "png" | "html"): Promise<void> {
   if (!isTauri) return;
-  const svg = viewer.toSVG();
   const picked = await saveDialog({
     title: `导出 ${kind.toUpperCase()}`,
     defaultPath: suggestName(kind),
@@ -289,14 +289,31 @@ async function exportAs(kind: "svg" | "png"): Promise<void> {
   if (!picked || Array.isArray(picked)) return;
   try {
     if (kind === "svg") {
-      await invoke("write_file", { path: picked, contents: svg });
+      await invoke("write_file", { path: picked, contents: viewer.toSVG() });
+    } else if (kind === "png") {
+      await invoke("write_binary", { path: picked, base64Data: await rasterizePng(viewer.toSVG()) });
     } else {
-      await invoke("write_binary", { path: picked, base64Data: await rasterizePng(svg) });
+      await invoke("write_file", { path: picked, contents: buildExportHTML() });
     }
     showBanner(`已导出 ${baseName(picked)}`);
   } catch (error) {
     showBanner(`导出失败：${String(error)}`);
   }
+}
+
+/** Self-contained reader: current source, theme and view state, interactive like the CLI output. */
+function buildExportHTML(): string {
+  const title = viewer.getDocument()?.diagram?.title
+    ?? (currentPath ? baseName(currentPath).replace(/\.blockml$/i, "") : "BlockML");
+  return renderStandaloneHTML({
+    source: viewer.getSource(),
+    title,
+    theme,
+    viewerScript,
+    viewerCss: VIEWER_CSS,
+    visibility: viewer.getVisibility(),
+    readOnly: false,
+  });
 }
 
 /* ------------------------------------------------------------------ viewer */
@@ -322,6 +339,7 @@ function handleMenu(id: string): void {
   if (id === "open") void openFile();
   else if (id === "save") void saveNow();
   else if (id === "save-as") void saveNow(true);
+  else if (id === "export-html") void exportAs("html");
   else if (id === "export-svg") void exportAs("svg");
   else if (id === "export-png") void exportAs("png");
   else if (id === "fit") viewer.fit();
@@ -371,7 +389,8 @@ function bindEvents(): void {
     const button = (event.target as Element).closest<HTMLButtonElement>("button[data-export]");
     if (!button) return;
     exportMenu.classList.add("hidden");
-    void exportAs(button.dataset.export === "png" ? "png" : "svg");
+    const kind = button.dataset.export;
+    if (kind === "svg" || kind === "png" || kind === "html") void exportAs(kind);
   });
   document.addEventListener("click", (event) => {
     if (!(event.target as Element).closest("#recent, #export, #recent-menu, #export-menu")) {

@@ -1,3 +1,5 @@
+import type { ViewerVisibility } from "./viewer.js";
+
 export interface StandaloneOptions {
   source: string;
   title?: string;
@@ -6,6 +8,8 @@ export interface StandaloneOptions {
   viewerScript: string;
   viewerCss: string;
   readOnly?: boolean;
+  /** Initial view state; collapsed / hidden items stay view-only and are not written back. */
+  visibility?: ViewerVisibility;
 }
 
 function escapeHtml(text: string): string {
@@ -20,6 +24,15 @@ function jsonForScript(value: unknown): string {
   return JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 }
 
+/** Keep letters from any script so a Chinese title does not collapse to "-.blockml". */
+function downloadName(title: string): string {
+  const slug = title
+    .replace(/[^\p{L}\p{N}._-]+/gu, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+  return `${slug || "blockml"}.blockml`;
+}
+
 /** Wrap a `.blockml` document into a self-contained, double-clickable HTML file. */
 export function renderStandaloneHTML(options: StandaloneOptions): string {
   const title = options.title ?? "BlockML";
@@ -27,6 +40,7 @@ export function renderStandaloneHTML(options: StandaloneOptions): string {
   const readOnly = options.readOnly ?? false;
   const script = options.viewerScript.replace(/<\/script/gi, "<\\/script");
   const sourceJson = jsonForScript(options.source);
+  const visibilityJson = options.visibility ? jsonForScript(options.visibility) : null;
 
   return `<!doctype html>
 <html lang="zh-CN" data-bml-theme="${theme}">
@@ -93,6 +107,7 @@ ${options.viewerCss}
   <div id="blockml-mount"></div>
 </div>
 <script id="blockml-source" type="application/json">${sourceJson}</script>
+${visibilityJson ? `<script id="blockml-visibility" type="application/json">${visibilityJson}</script>` : ""}
 <script>${script}</script>
 <script>
 (function(){
@@ -102,6 +117,13 @@ ${options.viewerCss}
     theme: "${theme}",
     readOnly: ${readOnly}
   });
+  var initialEl = document.getElementById("blockml-visibility");
+  if (initialEl) {
+    var initial = JSON.parse(initialEl.textContent);
+    handle.setHiddenNodes(initial.hiddenNodes);
+    handle.setHiddenGroups(initial.hiddenGroups);
+    handle.setCollapsedGroups(initial.collapsedGroups);
+  }
   // Expose the handle for debugging and for embedding pages that want to script it.
   window.blockmlViewer = handle;
   window.__blockmlGetSource = function(){ return handle.getSource(); };
@@ -114,7 +136,7 @@ ${options.viewerCss}
       var blob = new Blob([handle.getSource()], {type: "text/plain;charset=utf-8"});
       var a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = ${jsonForScript(title.replace(/[^\w.-]+/g, "-").toLowerCase() + ".blockml")};
+      a.download = ${jsonForScript(downloadName(title))};
       a.click();
       setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
     }
