@@ -302,6 +302,63 @@ edge a -> b "go" { via: 0, -40 }
     expect(geo.control).toEqual({ x: 350, y: -9 });
   });
 
+  it("keeps a long edge near the node envelope instead of looping above it", () => {
+    const doc = parse(`node profile "Profile" { at: 390, 80 }
+node session "Session" { at: 700, 80 }
+node projection "Projection" { at: 1010, 80 }
+node cmd "Command" { at: 1320, 80 }
+node pg "PostgreSQL" { at: 1630, 80 }
+node wecom "WeCom" { at: 1320, 198 }
+edge wecom -> profile "binding" { via: 0, -70 }
+`).document;
+    const byId = new Map(doc.nodes.map((node) => [node.id, node]));
+    const pairs = indexPairs(doc);
+    const obstacles = doc.nodes.map((node) => ({ id: node.id, rect: boxOf(node) }));
+    const edge = doc.edges[0]!;
+    const geo = edgeGeometry(edge, { byId, pairs, obstacles })!;
+    const points = geo.detour ?? sampleEdgePath(geo, 240);
+    // The node envelope is y 80..260; a loop may bow at most 96px past it.
+    for (const point of points) {
+      expect(point.y).toBeGreaterThanOrEqual(80 - 96 - 1);
+      expect(point.y).toBeLessThanOrEqual(260 + 96 + 1);
+    }
+    for (const point of points) {
+      for (const obstacle of obstacles) {
+        if (obstacle.id === edge.from || obstacle.id === edge.to) continue;
+        expect(
+          point.x > obstacle.rect.x + 1 && point.x < obstacle.rect.x + obstacle.rect.w - 1 &&
+          point.y > obstacle.rect.y + 1 && point.y < obstacle.rect.y + obstacle.rect.h - 1,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("keeps a long horizontal edge compact across a row of blockers", () => {
+    const doc = parse(`node profile "Profile" { at: 390, 80 }
+node session "Session" { at: 700, 80 }
+node projection "Projection" { at: 1010, 80 }
+node cmd "Command" { at: 1320, 80 }
+node pg "PostgreSQL" { at: 1630, 80 }
+edge profile -> pg "write"
+`).document;
+    const byId = new Map(doc.nodes.map((node) => [node.id, node]));
+    const pairs = indexPairs(doc);
+    const obstacles = doc.nodes.map((node) => ({ id: node.id, rect: boxOf(node) }));
+    const edge = doc.edges[0]!;
+    const geo = edgeGeometry(edge, { byId, pairs, obstacles })!;
+    const points = geo.detour ?? sampleEdgePath(geo, 240);
+    for (const point of points) expect(point.y).toBeGreaterThanOrEqual(80 - 96 - 1);
+    for (const point of points) {
+      for (const obstacle of obstacles) {
+        if (obstacle.id === edge.from || obstacle.id === edge.to) continue;
+        expect(
+          point.x > obstacle.rect.x + 1 && point.x < obstacle.rect.x + obstacle.rect.w - 1 &&
+          point.y > obstacle.rect.y + 1 && point.y < obstacle.rect.y + obstacle.rect.h - 1,
+        ).toBe(false);
+      }
+    }
+  });
+
   it("never crosses a node in a dense grid, re-anchoring or detouring", () => {
     const doc = parse(`node order "order" { at: 890, 80 }
 node console "console" { at: 620, 80 }
@@ -395,6 +452,89 @@ edge order -> payment "gRPC"
         point.x > inventory.x + 1 && point.x < inventory.x + inventory.w - 1 &&
         point.y > inventory.y + 1 && point.y < inventory.y + inventory.h - 1,
       ).toBe(false);
+    }
+  });
+
+  it("keeps long edges on a layered layout inside the node envelope", () => {
+    const doc = parse(`node shell "app" { at: 80, 80 }
+node profile "Profile" { at: 390, 80 }
+node material "Material" { at: 390, 198 }
+node mcpkb "MCP" { at: 390, 316 }
+node session "Session" { at: 700, 80 }
+node ingest "Ingest" { at: 700, 198 }
+node rtSandbox "Sandbox" { at: 700, 316 }
+node rtCloud "Cloud" { at: 700, 434 }
+node projection "Projection" { at: 1010, 80 }
+node cmd "Command" { at: 1320, 80 }
+node wecom "WeCom" { at: 1320, 198 }
+node feishu "Feishu" { at: 1320, 316 }
+node pg "PostgreSQL" { at: 1630, 80 }
+node cloud "cloud-agent" { at: 1912, 186 }
+node sandbox "sandbox-agent" { at: 1940, 80 }
+edge wecom -> profile "binding" { via: 0, -70 }
+edge feishu -> profile "binding" { via: 0, 70 }
+edge profile -> pg "write"
+edge session -> pg "Session + EventLog"
+edge projection -> pg "read"
+`).document;
+    const boxes = new Map(doc.nodes.map((node) => [node.id, boxOf(node)]));
+    const obstacles = doc.nodes.map((node) => ({ id: node.id, rect: boxOf(node) }));
+    const sides = planCurveSides(doc);
+    const uses = new Map<string, SideUse>();
+    const useOf = (nodeId: string, side: EdgeSide): SideUse => {
+      const key = `${nodeId}\u0000${side}`;
+      let use = uses.get(key);
+      if (!use) {
+        use = { box: boxes.get(nodeId)!, side, ins: [], outs: [], bundles: [] };
+        uses.set(key, use);
+      }
+      return use;
+    };
+    for (const edge of doc.edges) {
+      const fromBox = boxes.get(edge.from)!;
+      const toBox = boxes.get(edge.to)!;
+      const fromSide = sides.get(edge.id)!.from;
+      const toSide = sides.get(edge.id)!.to;
+      useOf(edge.from, fromSide).outs.push({
+        edge,
+        desired: sideAlong(fromBox, fromSide, { x: toBox.cx, y: toBox.cy }),
+      });
+      useOf(edge.to, toSide).ins.push({
+        edge,
+        desired: sideAlong(toBox, toSide, { x: fromBox.cx, y: fromBox.cy }),
+      });
+    }
+    // Same anchors the viewer hands to edgeGeometry after planPorts.
+    const anchors = new Map<string, { from?: { point: Point; side: EdgeSide }; to?: { point: Point; side: EdgeSide } }>();
+    for (const assignment of planPorts([...uses.values()])) {
+      const forced = anchors.get(assignment.edgeId) ?? {};
+      forced[assignment.end] = { point: assignment.point, side: assignment.side };
+      anchors.set(assignment.edgeId, forced);
+    }
+    const byId = new Map(doc.nodes.map((node) => [node.id, node]));
+    const pairs = indexPairs(doc);
+    const rects = [...boxes.values()];
+    // Long edges may bow, but only within the drawing's own margin.
+    const left = Math.min(...rects.map((box) => box.x)) - 120;
+    const top = Math.min(...rects.map((box) => box.y)) - 120;
+    const right = Math.max(...rects.map((box) => box.x + box.w)) + 120;
+    const bottom = Math.max(...rects.map((box) => box.y + box.h)) + 120;
+    for (const edge of doc.edges) {
+      const geo = edgeGeometry(edge, { byId, pairs, obstacles, anchors })!;
+      for (const point of sampleEdgePath(geo, 480)) {
+        expect(point.x).toBeGreaterThanOrEqual(left);
+        expect(point.x).toBeLessThanOrEqual(right);
+        expect(point.y).toBeGreaterThanOrEqual(top);
+        expect(point.y).toBeLessThanOrEqual(bottom);
+        for (const node of doc.nodes) {
+          if (node.id === edge.from || node.id === edge.to) continue;
+          const rect = boxOf(node);
+          expect(
+            point.x > rect.x + 1 && point.x < rect.x + rect.w - 1 &&
+            point.y > rect.y + 1 && point.y < rect.y + rect.h - 1,
+          ).toBe(false);
+        }
+      }
     }
   });
 });
