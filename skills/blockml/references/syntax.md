@@ -1,6 +1,6 @@
 # BlockML 语法速查
 
-> 新文档只写**语义**：块、连线、分组、kind、tech、note、src、tags、bundle。布局与样式键（`at` / `via` / `dash` / `color` / `theme` / `route`）是编辑器回写或旧文件兼容键，不要手写。
+> 新文档只写**语义**：块、连线、分组、kind、tech、note、src、tags、bundle。布局与样式键（`at` / `via` / `dash` / `color` / `theme`）是编辑器回写或旧文件兼容键，不要手写；走线风格（曲线 / 正交）由阅读器工具条决定，`route` 不是文档键。
 
 ## 顶层块
 
@@ -30,7 +30,7 @@ edge  <from> -> <to> "标签" { … }  // 0..n 个
 | 类型 | 写法 | 出现在 |
 | --- | --- | --- |
 | string | `"文本"` / `"""多行"""` | title、tech、note、src、label |
-| ident | `service`（裸词） | kind、group、bundle、旧文件 theme / direction / route |
+| ident | `service`（裸词） | kind、group、bundle、旧文件 theme / direction |
 | number | `12`、`-3.5` | 旧文件坐标 |
 | pair | `340, 280` | 旧文件 `at`、`via` |
 | boolean | `true` / `false` | 旧文件 `dash` |
@@ -50,7 +50,8 @@ edge  <from> -> <to> "标签" { … }  // 0..n 个
 | `version` | string | `"1.0"` | 规范版本 |
 | `theme` | ident | `light` | **兼容保留**，新文档不写 |
 | `direction` | ident | `TB` | **兼容保留**，默认分层布局不读取 |
-| `route` | ident | `curve` | **兼容保留的查看器预设**；用 `render --route` 代替，新文档不写 |
+
+> `route` 不是文档属性。旧文件里的 `diagram.route` 会被忽略并给出 `BLK005` 警告；走线风格在阅读器工具条切换，或用 `render --route` 设初始值。
 
 ### group
 
@@ -93,7 +94,7 @@ edge  <from> -> <to> "标签" { … }  // 0..n 个
 - 线不穿过非端点节点；交叉统一画跳弧。
 - 标签与连线都在适应窗口内，不会被裁掉。
 
-`curve` 与 `orthogonal` 共用上面全部规则。用 `render <file> --route orthogonal` 切换预设。
+`curve` 与 `orthogonal` 共用上面全部规则。阅读器工具条可随时切换；`render <file> --route orthogonal` 只设初始风格。
 
 ## 诊断码
 

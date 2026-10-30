@@ -11,7 +11,7 @@ export interface StandaloneOptions {
   readOnly?: boolean;
   /** Delivered figures open in presentation; the bar switches to editing. */
   mode?: "presentation" | "editing";
-  /** Viewer-level route preset; overrides the legacy `diagram.route` key. */
+  /** Initial route style for the reader; switchable from the toolbar. */
   route?: RouteStyle;
   /** Initial view state; collapsed / hidden items stay view-only and are not written back. */
   visibility?: ViewerVisibility;
@@ -44,6 +44,7 @@ export function renderStandaloneHTML(options: StandaloneOptions): string {
   const theme = options.theme ?? "light";
   const readOnly = options.readOnly ?? false;
   const mode = options.mode ?? "presentation";
+  const route = options.route ?? "curve";
   const routeOption = options.route ? `,\n    route: "${options.route}"` : "";
   const modeButton = readOnly
     ? ""
@@ -111,6 +112,10 @@ ${options.viewerCss}
       <option value="snowflake">雪花形</option>
       <option value="compact">紧凑型</option>
     </select>
+    <select id="blockml-route" title="走线风格">
+      <option value="curve"${route === "curve" ? " selected" : ""}>曲线</option>
+      <option value="orthogonal"${route === "orthogonal" ? " selected" : ""}>正交</option>
+    </select>
     <button data-act="fit">适应窗口</button>
     <button data-act="zoom-in">＋</button>
     <button data-act="zoom-out">－</button>
@@ -166,6 +171,9 @@ ${visibilityJson ? `<script id="blockml-visibility" type="application/json">${vi
     var algorithm = event.target.value;
     if (!algorithm) return;
     handle.layout(algorithm);
+  });
+  document.getElementById("blockml-route").addEventListener("change", function(event){
+    handle.setRoute(event.target.value);
   });
   document.getElementById("blockml-bar").addEventListener("click", function(event){
     var button = event.target.closest("button[data-act]");

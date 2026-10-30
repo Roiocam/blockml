@@ -22,7 +22,7 @@ const HELP = `blockml — diagram-as-code for architecture maps
       --title <text>     阅读器标题（默认取 diagram.title / 文件名）
       --theme <light|dark>
       --readonly         只读：禁止拖动写回
-      --route <style>    打开时的走线预设：curve | orthogonal（覆盖文件里的 legacy route）
+      --route <style>    阅读器初始走线风格：curve | orthogonal（默认 curve）
       --algo <name>      layout 算法：layered | pipeline | snowflake | compact
   -h, --help
 

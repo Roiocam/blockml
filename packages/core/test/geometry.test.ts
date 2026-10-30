@@ -569,8 +569,7 @@ describe("label placement", () => {
   });
 });
 
-const routed = parse(`diagram { route: orthogonal }
-node hub "hub" { at: 0, 0 }
+const routed = parse(`node hub "hub" { at: 0, 0 }
 node right "right" { at: 500, 60 }
 node below "below" { at: 140, 420 }
 
@@ -613,12 +612,6 @@ describe("orthogonalRoute", () => {
       expect(start.x === from.at!.x || start.x === from.at!.x + 200 || start.y === from.at!.y || start.y === from.at!.y + 62).toBe(true);
       expect(end.x === to.at!.x || end.x === to.at!.x + 200 || end.y === to.at!.y || end.y === to.at!.y + 62).toBe(true);
     }
-  });
-
-  it("parses and serializes the route attribute", () => {
-    expect(routed.diagram?.route).toBe("orthogonal");
-    expect(serialize(routed)).toContain("route: orthogonal");
-    expect(parse("diagram { title: \"x\" }").document.diagram?.route).toBe("curve");
   });
 
   it("bends around a node instead of taking an aligned shortcut through it", () => {

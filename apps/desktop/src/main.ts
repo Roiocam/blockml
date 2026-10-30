@@ -70,6 +70,8 @@ let saveTimer: number | undefined;
 let externalSource: string | null = null;
 let autoSave = localStorage.getItem("blockml.autosave") !== "0";
 let theme: "light" | "dark" = initialTheme();
+type RouteStyle = "curve" | "orthogonal";
+let route: RouteStyle = localStorage.getItem("blockml.route") === "orthogonal" ? "orthogonal" : "curve";
 
 autoSaveInput.checked = autoSave;
 
@@ -314,6 +316,7 @@ function buildExportHTML(): string {
     visibility: viewer.getVisibility(),
     mode: "presentation",
     readOnly: false,
+    route: viewer.getRoute(),
   });
 }
 
@@ -322,6 +325,7 @@ function buildExportHTML(): string {
 viewer = mount(canvas, {
   source: isTauri ? EMPTY_SOURCE : PREVIEW_SOURCE,
   theme,
+  route,
   onSourceChange(next) {
     source = next;
     if (!isTauri) return;
@@ -360,6 +364,13 @@ function bindEvents(): void {
     const algorithm = (event.target as HTMLSelectElement).value;
     if (!algorithm) return;
     viewer.layout(algorithm as Parameters<ViewerHandle["layout"]>[0]);
+  });
+  const routeSelect = byId<HTMLSelectElement>("route");
+  routeSelect.value = route;
+  routeSelect.addEventListener("change", () => {
+    route = routeSelect.value === "orthogonal" ? "orthogonal" : "curve";
+    localStorage.setItem("blockml.route", route);
+    viewer.setRoute(route);
   });
   themeButton.addEventListener("click", () => applyTheme(theme === "dark" ? "light" : "dark"));
 

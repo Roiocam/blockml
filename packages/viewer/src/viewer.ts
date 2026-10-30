@@ -89,8 +89,8 @@ export interface ViewerOptions {
    */
   mode?: "presentation" | "editing";
   /**
-   * Route preset for this view. Overrides the legacy `diagram.route` key; both
-   * styles satisfy the same port/normal/label contract.
+   * Initial route style for this view. Routing is a rendering choice, not a
+   * document key; both styles satisfy the same port/normal/label contract.
    */
   route?: RouteStyle;
   /**
@@ -126,6 +126,9 @@ export interface ViewerHandle {
   /** Switch between the delivered figure and the editable canvas. */
   setMode(mode: "presentation" | "editing"): void;
   getMode(): "presentation" | "editing";
+  /** Switch routing at render time; never written back to the source. */
+  setRoute(style: RouteStyle): void;
+  getRoute(): RouteStyle;
   fit(): void;
   zoomTo(scale: number): void;
   layout(algorithm: LayoutAlgorithm): void;
@@ -263,6 +266,7 @@ class Viewer implements ViewerHandle {
     this.options = options;
     this.source = options.source;
     this.mode = options.mode ?? "editing";
+    this.routeStyle = options.route ?? "curve";
 
     this.root = document.createElement("div");
     this.root.className = "bml-root";
@@ -533,7 +537,6 @@ class Viewer implements ViewerHandle {
 
   private render(): void {
     if (!this.doc || !this.viewDoc) return;
-    this.routeStyle = this.options.route ?? this.doc.diagram?.route ?? "curve";
     this.nodeEls.clear();
     this.edgeEls.clear();
     this.groupEls.clear();
@@ -2283,6 +2286,16 @@ class Viewer implements ViewerHandle {
 
   getMode(): "presentation" | "editing" {
     return this.mode;
+  }
+
+  setRoute(style: RouteStyle): void {
+    if (this.routeStyle === style) return;
+    this.routeStyle = style;
+    this.render();
+  }
+
+  getRoute(): RouteStyle {
+    return this.routeStyle;
   }
 
   toSVG(): string {

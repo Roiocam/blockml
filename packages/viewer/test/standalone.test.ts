@@ -71,6 +71,19 @@ describe("renderStandaloneHTML", () => {
     expect(html).toContain('route: "orthogonal"');
   });
 
+  it("offers a render-time route switch outside editing-only chrome", () => {
+    const html = renderStandaloneHTML(base());
+    expect(html).toContain('id="blockml-route"');
+    expect(html).toContain('<option value="curve" selected>曲线</option>');
+    expect(html).not.toContain('id="blockml-route" class="bml-editing-only"');
+    expect(html).toContain("handle.setRoute(event.target.value)");
+  });
+
+  it("starts the route switch on the requested style", () => {
+    const html = renderStandaloneHTML(base({ route: "orthogonal" }));
+    expect(html).toContain('<option value="orthogonal" selected>正交</option>');
+  });
+
   it("hides the mode toggle for read-only exports", () => {
     const html = renderStandaloneHTML(base({ readOnly: true }));
     expect(html).not.toContain('<button data-act="mode"');

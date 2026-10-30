@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.2 — 2026-10-30
+
+### 变更
+
+- **走线风格移出语言**：`diagram.route` 不再是 BlockML 属性。旧文件里若还写着 `route:`，解析会忽略该属性并给出 `BLK005` 警告（不影响渲染与其它字段）。走线改为渲染期选择：阅读器与桌面 App 的工具条新增「曲线 / 正交」切换，随时生效且不写回文件；`render --route` 只设置打开时的初始风格。删除 `DiagramDecl.route`，`serialize` 不再输出 `route`。
+
+### 文档
+
+- 规范升级到 v1.4：§3.1 删除 `route` 属性、§10 增加渲染期走线切换；README、CLI / viewer README 与 BlockML skill 的语法/配方同步更新。
+
 ## 0.4.1 — 2026-10-30
 
 ### 修复
