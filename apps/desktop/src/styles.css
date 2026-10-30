@@ -79,6 +79,9 @@ body { display: flex; flex-direction: column; }
   background-position: right 8px center;
 }
 #bar select:hover { color: var(--ink); border-color: var(--ink-3); }
+/* Preview keeps the app chrome but drops editing-only canvas controls, matching the HTML reader. */
+body[data-mode="presentation"] #layers,
+body[data-mode="presentation"] #layout { display: none; }
 
 .file {
   font-weight: 600;

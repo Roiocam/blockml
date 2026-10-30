@@ -48,7 +48,7 @@ node packages/cli/bin.mjs render examples/order-platform.blockml -o out/order-pl
 
 ## 桌面阅读器（Tauri）
 
-`apps/desktop` 把同一套 viewer 包成原生应用：系统文件对话框、拖入打开、拖动后自动写回文件、外部修改检测、最近文件、SVG / PNG / HTML 导出（HTML 是带当前主题与图层状态的可交互单文件阅读器，打开为演示态，可切到编辑态）、深浅主题，并注册 `.blockml` 文件关联（双击直达）。
+`apps/desktop` 把同一套 viewer 包成原生应用：系统文件对话框、拖入打开、拖动后自动写回文件、外部修改检测、最近文件、SVG / PNG / HTML 导出（HTML 是带当前主题、走线与图层状态的可交互单文件阅读器，打开为演示态，可切到编辑态）、深浅主题，以及与阅读器一致的查看控件——「预览 / 编辑」切换、图层、布局、曲线 / 正交走线、适应窗口与缩放（预览态隐藏图层与布局，画布无网格且不可拖动），并注册 `.blockml` 文件关联（双击直达）。
 
 前置：Node 20+、pnpm、Rust 工具链（`curl https://sh.rustup.rs -sSf | sh`）。
 
