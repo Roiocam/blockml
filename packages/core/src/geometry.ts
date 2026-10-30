@@ -333,6 +333,37 @@ function curveSampleCount(p1: Point, p2: Point): number {
   return Math.max(CURVE_SAMPLES, Math.min(CURVE_SAMPLES_MAX, Math.ceil(span / 4)));
 }
 
+/** How far outside the node envelope a curve may bow before it counts as a loop. */
+const CURVE_ESCAPE = 96;
+
+function curveBounds(rects: Rect[]): Rect | null {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const rect of rects) {
+    x0 = Math.min(x0, rect.x);
+    y0 = Math.min(y0, rect.y);
+    x1 = Math.max(x1, rect.x + rect.w);
+    y1 = Math.max(y1, rect.y + rect.h);
+  }
+  if (!Number.isFinite(x0)) return null;
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+function curveWithinBounds(geo: EdgeGeometry, bounds: Rect | null): boolean {
+  if (!bounds) return true;
+  for (const point of sampleEdgePath(geo, 48)) {
+    if (
+      point.x < bounds.x - CURVE_ESCAPE ||
+      point.x > bounds.x + bounds.w + CURVE_ESCAPE ||
+      point.y < bounds.y - CURVE_ESCAPE ||
+      point.y > bounds.y + bounds.h + CURVE_ESCAPE
+    ) return false;
+  }
+  return true;
+}
+
 /** Number of sampled curve positions that sit inside a node box. */
 function curveCrossings(geo: EdgeGeometry, obstacles: Rect[]): number {
   let hits = 0;
@@ -454,9 +485,12 @@ export function edgeGeometry(edge: EdgeDecl, ctx: GeometryContext): EdgeGeometry
   const obstacles = (ctx.obstacles ?? [])
     .filter((item) => item.id !== edge.from && item.id !== edge.to)
     .map((item) => item.rect);
+  const bounds = curveBounds([...obstacles, fromBox, toBox]);
+  const fits = (geo: EdgeGeometry): boolean =>
+    curveCrossings(geo, obstacles) === 0 && curveWithinBounds(geo, bounds);
 
   const first = buildCurve(p1, side1, p2, side2, control, spread, junction);
-  if (!obstacles.length || curveCrossings(first, obstacles) === 0) return first;
+  if (!obstacles.length || fits(first)) return first;
 
   // A shared bundle trunk must not move per edge; either it clears or the
   // bundle falls back to a normal port-to-port curve.
@@ -477,18 +511,7 @@ export function edgeGeometry(edge: EdgeDecl, ctx: GeometryContext): EdgeGeometry
     candidates.sort((a, b) => a.distance - b.distance);
     for (const candidate of candidates) {
       const geo = buildCurve(p1, side1, p2, side2, candidate.point, spread);
-      if (curveCrossings(geo, obstacles) === 0) return geo;
-    }
-    for (const radius of [400, 480, 560, 640, 720, 800]) {
-      for (const angle of [0, 45, -45, 90, -90, 135, -135, 180]) {
-        const rad = (angle * Math.PI) / 180;
-        const point = {
-          x: base.x + px * radius * Math.cos(rad) + (vx / len) * radius * Math.sin(rad),
-          y: base.y + py * radius * Math.cos(rad) + (vy / len) * radius * Math.sin(rad),
-        };
-        const geo = buildCurve(p1, side1, p2, side2, point, spread);
-        if (curveCrossings(geo, obstacles) === 0) return geo;
-      }
+      if (fits(geo)) return geo;
     }
   }
 
@@ -985,6 +1008,18 @@ export function primarySide(box: NodeBox, other: NodeBox): EdgeSide {
   return dy >= 0 ? "bottom" : "top";
 }
 
+const EDGE_SIDES: EdgeSide[] = ["left", "right", "top", "bottom"];
+
+function sidePenalty(side: EdgeSide, box: NodeBox, other: NodeBox): number {
+  const wanted = primarySide(box, other);
+  if (side === wanted) return 0;
+  const opposite =
+    wanted === "left" ? "right" :
+    wanted === "right" ? "left" :
+    wanted === "top" ? "bottom" : "top";
+  return side === opposite ? 60 : 20;
+}
+
 export interface CurveSides {
   from: EdgeSide;
   to: EdgeSide;
@@ -1005,9 +1040,10 @@ export interface CurveSideOptions {
 /**
  * Choose the border each curve end leaves from. The dominant-direction pair is
  * used whenever it produces a compact curve that clears every node; otherwise
- * the orthogonal router supplies a side pair that gets around the blockers.
- * Both cases still share ports per side in `planPorts`, so the result is about
- * direction, not about creating new attachment points.
+ * every side pair is tried and the shortest clean curve wins (with a penalty
+ * for leaving away from the other node). The orthogonal router is the last
+ * resort for bundles or a fully blocked pair. Ports are shared later per side
+ * in `planPorts`, so this only chooses directions, not attachment points.
  */
 export function planCurveSides(
   document: BlockDocument,
@@ -1036,10 +1072,10 @@ export function planCurveSides(
   }, null);
   const blockers = obstacles.map((item) => item.rect);
 
-  const trial = (edge: EdgeDecl, fromSide: EdgeSide, toSide: EdgeSide): boolean => {
+  const trial = (edge: EdgeDecl, fromSide: EdgeSide, toSide: EdgeSide): number | null => {
     const fromBox = boxes.get(edge.from);
     const toBox = boxes.get(edge.to);
-    if (!fromBox || !toBox) return false;
+    if (!fromBox || !toBox) return null;
     const fromPoint = sidePoint(fromBox, fromSide, sideAlong(fromBox, fromSide, { x: toBox.cx, y: toBox.cy }));
     const toPoint = sidePoint(toBox, toSide, sideAlong(toBox, toSide, { x: fromBox.cx, y: fromBox.cy }));
     const geo = edgeGeometry(edge, {
@@ -1053,31 +1089,31 @@ export function planCurveSides(
         to: { side: toSide, point: toPoint },
       }]]),
     });
-    if (!geo || geo.detour) return false;
+    if (!geo || geo.detour) return null;
     const points = sampleEdgePath(geo, 96);
     let pathLength = 0;
     for (let i = 1; i < points.length; i++) {
       pathLength += distance(points[i - 1]!, points[i]!);
     }
     const direct = distance(fromPoint, toPoint);
-    if (pathLength > Math.max(direct * 2.2, direct + 260)) return false;
+    if (pathLength > Math.max(direct * 2.2, direct + 260)) return null;
     const own = new Set([edge.from, edge.to]);
     for (const point of points) {
       if (
         bounds &&
         (point.x < bounds.x - margin || point.x > bounds.x + bounds.w + margin ||
          point.y < bounds.y - margin || point.y > bounds.y + bounds.h + margin)
-      ) return false;
+      ) return null;
       for (let i = 0; i < blockers.length; i++) {
         if (own.has(obstacles[i]!.id)) continue;
         const rect = blockers[i]!;
         if (
           point.x > rect.x + 1 && point.x < rect.x + rect.w - 1 &&
           point.y > rect.y + 1 && point.y < rect.y + rect.h - 1
-        ) return false;
+        ) return null;
       }
     }
-    return true;
+    return pathLength;
   };
 
   for (const edge of document.edges) {
@@ -1089,9 +1125,28 @@ export function planCurveSides(
       from: primarySide(fromBox, toBox),
       to: primarySide(toBox, fromBox),
     };
-    if (!forced?.from && !forced?.to && trial(edge, primary.from, primary.to)) {
-      result.set(edge.id, primary);
-      continue;
+    if (!forced?.from && !forced?.to) {
+      if (trial(edge, primary.from, primary.to) !== null) {
+        result.set(edge.id, primary);
+        continue;
+      }
+      let best: { sides: CurveSides; score: number } | null = null;
+      for (const fromSide of EDGE_SIDES) {
+        for (const toSide of EDGE_SIDES) {
+          if (fromSide === primary.from && toSide === primary.to) continue;
+          const length = trial(edge, fromSide, toSide);
+          if (length === null) continue;
+          const score =
+            sidePenalty(fromSide, fromBox, toBox) +
+            sidePenalty(toSide, toBox, fromBox) +
+            length * 0.03;
+          if (!best || score < best.score) best = { sides: { from: fromSide, to: toSide }, score };
+        }
+      }
+      if (best) {
+        result.set(edge.id, best.sides);
+        continue;
+      }
     }
     const route = orthogonalRoute(edge, {
       byId,
