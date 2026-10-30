@@ -312,6 +312,7 @@ function buildExportHTML(): string {
     viewerScript,
     viewerCss: VIEWER_CSS,
     visibility: viewer.getVisibility(),
+    mode: "presentation",
     readOnly: false,
   });
 }

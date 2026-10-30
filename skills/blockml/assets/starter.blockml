@@ -4,9 +4,7 @@ diagram {
   subtitle: "一句话说明这张图回答什么问题"
 }
 
-group core "核心" {
-  color: #4f46e5
-}
+group core "核心"
 
 node app "app" {
   group: core

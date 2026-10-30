@@ -8,13 +8,24 @@ import {
   indexPairs,
   orthogonalRoute,
   parse,
+  pathMetrics,
+  placeLabelOnPath,
+  planPorts,
   planSidePorts,
   portPositions,
   routeCrosses,
+  sampleEdgePath,
   serialize,
+  sideAlong,
+  sideMidpoint,
   sidePoint,
   sideRange,
   snapAlignment,
+  planCurveSides,
+  type EdgeDecl,
+  type EdgeSide,
+  type Point,
+  type SideUse,
 } from "../src/index.js";
 
 const source = `node hub "hub" { at: 0, 0 }
@@ -29,31 +40,392 @@ const document = parse(source).document;
 const byId = new Map(document.nodes.map((node) => [node.id, node]));
 const pairs = indexPairs(document);
 const [first, second] = document.edges;
-const fans = new Map([
-  [first!.id, { from: 6 }],
-  [second!.id, { from: -6 }],
-]);
 
-describe("edge anchors", () => {
-  it("fans edges that leave the same node along its border", () => {
-    const a = edgeGeometry(first!, { byId, pairs, fans })!;
-    const b = edgeGeometry(second!, { byId, pairs, fans })!;
-    expect(a.p1.x).toBe(200);
-    expect(b.p1.x).toBe(200);
-    expect(a.p1.y).not.toBe(b.p1.y);
+const SIDE_OUT: Record<EdgeSide, Point> = {
+  left: { x: -1, y: 0 },
+  right: { x: 1, y: 0 },
+  top: { x: 0, y: -1 },
+  bottom: { x: 0, y: 1 },
+};
+
+function angle(a: Point, b: Point): number {
+  const dot = a.x * b.x + a.y * b.y;
+  const la = Math.hypot(a.x, a.y);
+  const lb = Math.hypot(b.x, b.y);
+  if (!la || !lb) return 90;
+  return (Math.acos(Math.max(-1, Math.min(1, dot / la / lb))) * 180) / Math.PI;
+}
+
+function distance(a: Point, b: Point): number {
+  return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+function curveBetween(
+  fromAt: Point,
+  toAt: Point,
+  fromSide: EdgeSide,
+  toSide: EdgeSide,
+  via?: Point,
+) {
+  const doc = parse(`node a "a" { at: ${fromAt.x}, ${fromAt.y} }
+node b "b" { at: ${toAt.x}, ${toAt.y} }
+edge a -> b "go"${via ? ` { via: ${via.x}, ${via.y} }` : ""}
+`).document;
+  const edge = doc.edges[0]!;
+  const nodes = new Map(doc.nodes.map((node) => [node.id, node]));
+  const from = nodes.get("a")!;
+  const to = nodes.get("b")!;
+  const anchors = new Map([
+    [edge.id, {
+      from: { point: sideMidpoint(boxOf(from), fromSide), side: fromSide },
+      to: { point: sideMidpoint(boxOf(to), toSide), side: toSide },
+    }],
+  ]);
+  return edgeGeometry(edge, { byId: nodes, pairs: indexPairs(doc), anchors })!;
+}
+
+describe("shared side ports", () => {
+  const portDoc = parse(`node hub "hub" { at: 0, 0 }
+node a "a" { at: 400, -200 }
+node b "b" { at: 400, -100 }
+node c "c" { at: 400, 0 }
+node d "d" { at: 400, 100 }
+node e "e" { at: 400, 200 }
+
+edge a -> hub "in-a"
+edge b -> hub "in-b"
+edge hub -> c "out-c"
+edge hub -> d "out-d"
+edge hub -> e "out-e"
+`).document;
+  const hub = boxOf(portDoc.nodes[0]!);
+  const edges = new Map(portDoc.edges.map((edge) => [edge.id, edge]));
+  const use = (keys: string[]): SideUse => ({
+    box: hub,
+    side: "right",
+    ins: ["e1", "e2"].filter((id) => keys.includes(id)).map((id) => ({ edge: edges.get(id)!, desired: 31 })),
+    outs: ["e3", "e4", "e5"].filter((id) => keys.includes(id)).map((id) => ({ edge: edges.get(id)!, desired: 31 })),
+    bundles: [],
   });
 
-  it("clamps fanned anchors inside the node border", () => {
-    const geo = edgeGeometry(first!, { byId, pairs, fans: new Map([[first!.id, { from: 500 }]]) })!;
-    expect(geo.p1.y).toBe(48);
+  it("gives every same-direction edge one shared port", () => {
+    const assignments = planPorts([use(["e3", "e4", "e5"])]);
+    expect(assignments).toHaveLength(3);
+    expect(new Set(assignments.map((item) => `${item.point.x},${item.point.y}`)).size).toBe(1);
   });
 
-  it("leaves the far anchor untouched", () => {
-    const plain = edgeGeometry(first!, { byId, pairs })!;
-    const fanned = edgeGeometry(first!, { byId, pairs, fans })!;
-    expect(plain.p2).toEqual(fanned.p2);
-    expect(plain.p1.y).toBe(56);
-    expect(fanned.p1.y).toBe(48);
+  it("keeps inbound and outbound groups on separate ports (<= 2 for 5 edges)", () => {
+    const assignments = planPorts([use(["e1", "e2", "e3", "e4", "e5"])]);
+    const points = new Set(assignments.map((item) => `${item.point.x},${item.point.y}`));
+    expect(points.size).toBe(2);
+    const inbound = assignments.filter((item) => item.end === "to");
+    const outbound = assignments.filter((item) => item.end === "from");
+    expect(new Set(inbound.map((item) => `${item.point.x},${item.point.y}`)).size).toBe(1);
+    expect(new Set(outbound.map((item) => `${item.point.x},${item.point.y}`)).size).toBe(1);
+    expect(inbound[0]!.point).not.toEqual(outbound[0]!.point);
+  });
+
+  it("gives every bundle its own port beside in/out", () => {
+    const bundleEdges = ["e3", "e4"].map((id) => edges.get(id)!);
+    const assignments = planPorts([
+      {
+        ...use(["e1", "e5"]),
+        bundles: [{ key: "bundle:http", desired: 31, edges: bundleEdges, end: "from" }],
+      },
+    ]);
+    const bundlePoints = new Set(
+      assignments.filter((item) => item.end === "from" && bundleEdges.some((edge) => edge.id === item.edgeId))
+        .map((item) => `${item.point.x},${item.point.y}`),
+    );
+    expect(bundlePoints.size).toBe(1);
+    const all = new Set(assignments.map((item) => `${item.point.x},${item.point.y}`));
+    expect(all.size).toBe(3);
+  });
+});
+
+describe("curve geometry", () => {
+  it("leaves and enters every border along its normal with a straight stub", () => {
+    const cases: { from: Point; to: Point; fromSide: EdgeSide; toSide: EdgeSide }[] = [
+      { from: { x: 0, y: 0 }, to: { x: 500, y: 200 }, fromSide: "right", toSide: "left" },
+      { from: { x: 0, y: 0 }, to: { x: 500, y: 200 }, fromSide: "bottom", toSide: "top" },
+      { from: { x: 0, y: 0 }, to: { x: 500, y: 200 }, fromSide: "right", toSide: "top" },
+      { from: { x: 0, y: 0 }, to: { x: 500, y: 200 }, fromSide: "left", toSide: "bottom" },
+    ];
+    for (const item of cases) {
+      const geo = curveBetween(item.from, item.to, item.fromSide, item.toSide);
+      const firstSegment = geo.segments![0]!;
+      const lastSegment = geo.segments![geo.segments!.length - 1]!;
+      expect(firstSegment.type).toBe("line");
+      expect(lastSegment.type).toBe("line");
+      const startAngle = angle(
+        { x: firstSegment.b.x - firstSegment.a.x, y: firstSegment.b.y - firstSegment.a.y },
+        SIDE_OUT[item.fromSide],
+      );
+      const endAngle = angle(
+        { x: lastSegment.b.x - lastSegment.a.x, y: lastSegment.b.y - lastSegment.a.y },
+        { x: -SIDE_OUT[item.toSide].x, y: -SIDE_OUT[item.toSide].y },
+      );
+      expect(startAngle).toBeLessThanOrEqual(0.5);
+      expect(endAngle).toBeLessThanOrEqual(0.5);
+      const fromStub = distance(geo.p1, firstSegment.b);
+      const toStub = distance(lastSegment.a, geo.p2);
+      expect(fromStub).toBeGreaterThanOrEqual(8);
+      expect(fromStub).toBeLessThanOrEqual(24);
+      expect(toStub).toBeGreaterThanOrEqual(8);
+      expect(toStub).toBeLessThanOrEqual(24);
+    }
+  });
+
+  it("keeps an unobstructed straight edge flat", () => {
+    const geo = curveBetween({ x: 0, y: 0 }, { x: 500, y: 0 }, "right", "left");
+    for (const point of sampleEdgePath(geo, 32)) {
+      expect(Math.abs(point.y - 31)).toBeLessThan(0.001);
+    }
+  });
+
+  it("bends through the via point", () => {
+    const geo = curveBetween({ x: 0, y: 0 }, { x: 500, y: 0 }, "right", "left", { x: 0, y: -40 });
+    expect(geo.control).toEqual({ x: 350, y: -9 });
+    const samples = sampleEdgePath(geo, 80);
+    expect(samples.some((point) => Math.abs(point.x - 350) < 1 && Math.abs(point.y + 9) < 1)).toBe(true);
+  });
+
+  it("uses the forced port as the exact endpoint", () => {
+    const geo = curveBetween({ x: 0, y: 0 }, { x: 500, y: 0 }, "right", "left");
+    expect(geo.p1).toEqual({ x: 200, y: 31 });
+    expect(geo.p2).toEqual({ x: 500, y: 31 });
+  });
+});
+
+describe("curve bundles", () => {
+  function bundleGeometries(sharedEnd: "from" | "to") {
+    const doc = sharedEnd === "from"
+      ? parse(`node hub "hub" { at: 0, 0 }
+node a "a" { at: 500, -160 }
+node b "b" { at: 500, 160 }
+edge hub -> a "one" { bundle: channels }
+edge hub -> b "two" { bundle: channels }
+`).document
+      : parse(`node hub "hub" { at: 500, 0 }
+node a "a" { at: 0, -160 }
+node b "b" { at: 0, 160 }
+edge a -> hub "one" { bundle: channels }
+edge b -> hub "two" { bundle: channels }
+`).document;
+    const nodes = new Map(doc.nodes.map((node) => [node.id, node]));
+    const hub = boxOf(nodes.get("hub")!);
+    const port = sideMidpoint(hub, sharedEnd === "from" ? "right" : "left");
+    const normal = sharedEnd === "from" ? 1 : -1;
+    const junction = {
+      point: { x: port.x + normal * 30, y: port.y },
+      side: sharedEnd === "from" ? ("right" as const) : ("left" as const),
+      end: sharedEnd,
+    };
+    const anchors = new Map(
+      doc.edges.map((edge) => {
+        const from = nodes.get(edge.from)!;
+        const target = nodes.get(edge.to)!;
+        return [edge.id, {
+          from: { point: sideMidpoint(boxOf(from), "right"), side: "right" as const },
+          to: { point: sideMidpoint(boxOf(target), "left"), side: "left" as const },
+        }];
+      }),
+    );
+    const junctions = new Map(doc.edges.map((edge) => [edge.id, junction]));
+    const geos = doc.edges.map((edge) => edgeGeometry(edge, {
+      byId: nodes,
+      pairs: indexPairs(doc),
+      anchors,
+      junctions,
+    })!);
+    return { geos, port, junction };
+  }
+
+  it("shares one straight trunk before branching when the source end is shared", () => {
+    const { geos, junction } = bundleGeometries("from");
+    for (const geo of geos) {
+      const first = geo.segments![0]!;
+      expect(first.type).toBe("line");
+      expect(first.a).toEqual(geo.p1);
+      expect(first.b).toEqual(junction.point);
+    }
+    // Branches reach different targets, so their sampled midpoints differ.
+    const a = sampleEdgePath(geos[0]!, 80);
+    const b = sampleEdgePath(geos[1]!, 80);
+    expect(a[Math.floor(a.length / 2)]).not.toEqual(b[Math.floor(b.length / 2)]);
+  });
+
+  it("shares one trunk into the target when the target end is shared", () => {
+    const { geos, junction } = bundleGeometries("to");
+    for (const geo of geos) {
+      const last = geo.segments![geo.segments!.length - 1]!;
+      expect(last.type).toBe("line");
+      expect(last.a).toEqual(junction.point);
+      expect(last.b).toEqual(geo.p2);
+      expect(geo.control).toEqual(junction.point);
+    }
+  });
+});
+
+describe("curve obstacle avoidance", () => {
+  it("bows around a node sitting on the straight run", () => {
+    const doc = parse(`node a "a" { at: 0, 0 }
+node mid "mid" { at: 250, 0 }
+node b "b" { at: 500, 0 }
+edge a -> b "go"
+`).document;
+    const byId = new Map(doc.nodes.map((node) => [node.id, node]));
+    const pairs = indexPairs(doc);
+    const obstacles = doc.nodes.map((node) => ({ id: node.id, rect: boxOf(node) }));
+    const [edge] = doc.edges;
+    const geo = edgeGeometry(edge!, { byId, pairs, obstacles })!;
+    const mid = boxOf(byId.get("mid")!);
+    let inside = 0;
+    for (const point of sampleEdgePath(geo, 120)) {
+      if (
+        point.x > mid.x + 1 && point.x < mid.x + mid.w - 1 &&
+        point.y > mid.y + 1 && point.y < mid.y + mid.h - 1
+      ) inside++;
+    }
+    expect(inside).toBe(0);
+  });
+
+  it("keeps the via apex when nothing blocks the curve", () => {
+    const doc = parse(`node a "a" { at: 0, 0 }
+node b "b" { at: 500, 0 }
+edge a -> b "go" { via: 0, -40 }
+`).document;
+    const byId = new Map(doc.nodes.map((node) => [node.id, node]));
+    const pairs = indexPairs(doc);
+    const obstacles = doc.nodes.map((node) => ({ id: node.id, rect: boxOf(node) }));
+    const geo = edgeGeometry(doc.edges[0]!, { byId, pairs, obstacles })!;
+    expect(geo.control).toEqual({ x: 350, y: -9 });
+  });
+
+  it("never crosses a node in a dense grid, re-anchoring or detouring", () => {
+    const doc = parse(`node order "order" { at: 890, 80 }
+node console "console" { at: 620, 80 }
+node analytics "analytics" { at: 890, 252 }
+node worker "worker" { at: 620, 252 }
+node payment "payment" { at: 350, 252 }
+node inventory "inventory" { at: 80, 252 }
+node pg "pg" { at: 80, 424 }
+node redis "redis" { at: 350, 424 }
+node stripe "stripe" { at: 620, 424 }
+node mailer "mailer" { at: 890, 424 }
+edge order -> pg "go"
+`).document;
+    const byId = new Map(doc.nodes.map((node) => [node.id, node]));
+    const pairs = indexPairs(doc);
+    const obstacles = doc.nodes.map((node) => ({ id: node.id, rect: boxOf(node) }));
+    const edge = doc.edges[0]!;
+    const geo = edgeGeometry(edge, { byId, pairs, obstacles })!;
+    const blockers = obstacles
+      .filter((item) => item.id !== edge.from && item.id !== edge.to)
+      .map((item) => item.rect);
+    for (const point of sampleEdgePath(geo, 400)) {
+      for (const rect of blockers) {
+        expect(
+          point.x > rect.x && point.x < rect.x + rect.w &&
+          point.y > rect.y && point.y < rect.y + rect.h,
+        ).toBe(false);
+      }
+    }
+  });
+});
+
+describe("curve side planning", () => {
+  function geometryFor(
+    doc: ReturnType<typeof parse>["document"],
+    edge: EdgeDecl,
+    sides: { from: EdgeSide; to: EdgeSide },
+  ) {
+    const byId = new Map(doc.nodes.map((node) => [node.id, node]));
+    const pairs = indexPairs(doc);
+    const obstacles = doc.nodes.map((node) => ({ id: node.id, rect: boxOf(node) }));
+    const fromBox = boxOf(byId.get(edge.from)!);
+    const toBox = boxOf(byId.get(edge.to)!);
+    const anchors = new Map([[
+      edge.id,
+      {
+        from: {
+          side: sides.from,
+          point: sidePoint(fromBox, sides.from, sideAlong(fromBox, sides.from, { x: toBox.cx, y: toBox.cy })),
+        },
+        to: {
+          side: sides.to,
+          point: sidePoint(toBox, sides.to, sideAlong(toBox, sides.to, { x: fromBox.cx, y: fromBox.cy })),
+        },
+      },
+    ]]);
+    return edgeGeometry(edge, { byId, pairs, obstacles, anchors })!;
+  }
+
+  it("keeps the direct pair instead of looping above the drawing", () => {
+    const doc = parse(`node payment "payment" { at: 390, 316 }
+node stripe "stripe" { at: 1010, 80 }
+node redis "redis" { at: 700, 198 }
+edge payment -> stripe "PaymentIntent"
+`).document;
+    const sides = planCurveSides(doc);
+    expect(sides.get(doc.edges[0]!.id)).toEqual({ from: "right", to: "left" });
+    const geo = geometryFor(doc, doc.edges[0]!, sides.get(doc.edges[0]!.id)!);
+    const highest = Math.min(...doc.nodes.map((node) => boxOf(node).y));
+    for (const point of sampleEdgePath(geo, 160)) {
+      // A direct pair may bow, but only within the drawing's own margin.
+      expect(point.y).toBeGreaterThan(highest - 120);
+      expect(
+        point.x > 700 + 1 && point.x < 900 - 1 && point.y > 198 + 1 && point.y < 260 - 1,
+      ).toBe(false);
+    }
+  });
+
+  it("leaves the straight pair when another node sits between both ends", () => {
+    const doc = parse(`node order "order" { at: 390, 80 }
+node inventory "inventory" { at: 390, 198 }
+node payment "payment" { at: 390, 316 }
+edge order -> payment "gRPC"
+`).document;
+    const sides = planCurveSides(doc).get(doc.edges[0]!.id)!;
+    expect(sides.from === "bottom" && sides.to === "top").toBe(false);
+    const geo = geometryFor(doc, doc.edges[0]!, sides);
+    const inventory = boxOf(doc.nodes.find((node) => node.id === "inventory")!);
+    for (const point of sampleEdgePath(geo, 160)) {
+      expect(
+        point.x > inventory.x + 1 && point.x < inventory.x + inventory.w - 1 &&
+        point.y > inventory.y + 1 && point.y < inventory.y + inventory.h - 1,
+      ).toBe(false);
+    }
+  });
+});
+
+describe("label placement", () => {
+  const path = pathMetrics([{ x: 0, y: 0 }, { x: 400, y: 0 }]);
+
+  it("keeps the label centre within 8px of its own path", () => {
+    const placed = placeLabelOnPath(path, 80, 17, [], []);
+    expect(Math.abs(placed.y)).toBeLessThanOrEqual(8);
+    expect(Math.abs(placed.offset)).toBeLessThanOrEqual(8);
+  });
+
+  it("slides along the path instead of covering a node", () => {
+    const obstacle = { x: 150, y: -30, w: 100, h: 60 };
+    const placed = placeLabelOnPath(path, 80, 17, [obstacle], []);
+    const rect = placed.rect;
+    const overlap =
+      Math.max(0, Math.min(rect.x + rect.w, obstacle.x + obstacle.w) - Math.max(rect.x, obstacle.x)) *
+      Math.max(0, Math.min(rect.y + rect.h, obstacle.y + obstacle.h) - Math.max(rect.y, obstacle.y));
+    expect(overlap).toBe(0);
+    expect(Math.abs(placed.offset)).toBeLessThanOrEqual(8);
+  });
+
+  it("does not stack two labels on the same spot", () => {
+    const first = placeLabelOnPath(path, 80, 17, [], []);
+    const second = placeLabelOnPath(path, 80, 17, [], [first.rect]);
+    const overlap =
+      Math.max(0, Math.min(first.rect.x + first.rect.w, second.rect.x + second.rect.w) - Math.max(first.rect.x, second.rect.x)) *
+      Math.max(0, Math.min(first.rect.y + first.rect.h, second.rect.y + second.rect.h) - Math.max(first.rect.y, second.rect.y));
+    expect(overlap).toBe(0);
   });
 });
 
@@ -339,79 +711,6 @@ describe("snapAlignment", () => {
     expect(snapAlignment(moving, [], 7, 9, 6)).toEqual({ dx: 7, dy: 9, guides: [] });
     expect(snapAlignment(moving, [{ x: 104, y: 100, w: 200, h: 62 }], 0, 0, 0))
       .toEqual({ dx: 0, dy: 0, guides: [] });
-  });
-});
-
-describe("curve obstacle avoidance", () => {
-  it("bows around a node sitting on the straight run", () => {
-    const doc = parse(`node a "a" { at: 0, 0 }
-node mid "mid" { at: 250, 0 }
-node b "b" { at: 500, 0 }
-edge a -> b "go"
-`).document;
-    const byId = new Map(doc.nodes.map((node) => [node.id, node]));
-    const pairs = indexPairs(doc);
-    const obstacles = doc.nodes.map((node) => ({ id: node.id, rect: boxOf(node) }));
-    const [edge] = doc.edges;
-    const geo = edgeGeometry(edge!, { byId, pairs, obstacles })!;
-    const mid = boxOf(byId.get("mid")!);
-    let inside = 0;
-    for (let i = 1; i < 80; i++) {
-      const point = bezierAt(geo.p1, geo.control, geo.p2, i / 80);
-      if (
-        point.x > mid.x + 1 && point.x < mid.x + mid.w - 1 &&
-        point.y > mid.y + 1 && point.y < mid.y + mid.h - 1
-      ) inside++;
-    }
-    expect(inside).toBe(0);
-  });
-
-  it("keeps the via control when nothing blocks the curve", () => {
-    const doc = parse(`node a "a" { at: 0, 0 }
-node b "b" { at: 500, 0 }
-edge a -> b "go" { via: 0, -40 }
-`).document;
-    const byId = new Map(doc.nodes.map((node) => [node.id, node]));
-    const pairs = indexPairs(doc);
-    const obstacles = doc.nodes.map((node) => ({ id: node.id, rect: boxOf(node) }));
-    const geo = edgeGeometry(doc.edges[0]!, { byId, pairs, obstacles })!;
-    expect(geo.control).toEqual({ x: 350, y: -9 });
-  });
-
-  it("never crosses a node in a dense grid, re-anchoring or detouring", () => {
-    const doc = parse(`node order "order" { at: 890, 80 }
-node console "console" { at: 620, 80 }
-node analytics "analytics" { at: 890, 252 }
-node worker "worker" { at: 620, 252 }
-node payment "payment" { at: 350, 252 }
-node inventory "inventory" { at: 80, 252 }
-node pg "pg" { at: 80, 424 }
-node redis "redis" { at: 350, 424 }
-node stripe "stripe" { at: 620, 424 }
-node mailer "mailer" { at: 890, 424 }
-edge order -> pg "go"
-`).document;
-    const byId = new Map(doc.nodes.map((node) => [node.id, node]));
-    const pairs = indexPairs(doc);
-    const obstacles = doc.nodes.map((node) => ({ id: node.id, rect: boxOf(node) }));
-    const edge = doc.edges[0]!;
-    const geo = edgeGeometry(edge, { byId, pairs, obstacles })!;
-    const blockers = obstacles
-      .filter((item) => item.id !== edge.from && item.id !== edge.to)
-      .map((item) => item.rect);
-    if (geo.detour) {
-      expect(routeCrosses(geo.detour, blockers, 0)).toBe(false);
-      return;
-    }
-    for (let i = 1; i < 400; i++) {
-      const point = bezierAt(geo.p1, geo.control, geo.p2, i / 400);
-      for (const rect of blockers) {
-        expect(
-          point.x > rect.x && point.x < rect.x + rect.w &&
-          point.y > rect.y && point.y < rect.y + rect.h,
-        ).toBe(false);
-      }
-    }
   });
 });
 

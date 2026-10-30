@@ -5,7 +5,7 @@ description: 用 BlockML（.blockml）写架构图并交付可交互的单个 HT
 
 # BlockML
 
-BlockML 是给架构图用的 diagram-as-code：一块文本同时描述**语义**（有哪些块、怎么连、怎么分组）和**布局**（坐标、连线曲率）。写完能渲染，拖完能回写，文件和图永远一致。
+BlockML 是给架构图用的 diagram-as-code：作者只写**语义**（有哪些块、怎么连、怎么分组），布局与渲染质量由平台负责。默认分层布局、共享端口、法线出线、标签避让、避障与跨线跳弧都不需要手写样式；用户拖动后，坐标只由编辑器回写到同一份文件。
 
 ## 什么时候用
 
@@ -16,15 +16,15 @@ BlockML 是给架构图用的 diagram-as-code：一块文本同时描述**语义
 ## 工作流
 
 1. **先划范围**：这张图回答什么问题？选 6–16 个块。超过 20 个先分两张。
-2. **写 `.blockml`**：先 `group`，再 `node`，最后 `edge`。位置可以先不写，渲染器会自动补位。
+2. **写 `.blockml`**：先 `group`，再 `node`，最后 `edge`。**不要写 `at` / `via` / `color` / `theme` / `dash` / `route`**——布局和线型交给平台。
 3. **每条断言挂 `src`**：节点/边只要说了「谁连谁、跑在哪、几个连接池」这类事实，就要能被 `文件:行` 或文档章节指到。没有出处的断言不要写进图。
 4. **自检**：`node <blockml-repo>/packages/cli/bin.mjs validate <file>`，error 必须清零，warning 逐条确认。
-5. **排版**（可选）：`node <blockml-repo>/packages/cli/bin.mjs layout <file> --algo layered --write`，让机器先摆一遍，再人工微调
-6. **交付**：`node <blockml-repo>/packages/cli/bin.mjs render <file> -o <out.html>`，把 HTML 路径给用户。用户拖动后的坐标会写回 `.blockml`，可再 `下载源码`；阅读器里的分组折叠与「图层」隐藏只影响视图，不写回文件。
+5. **交付**：`node <blockml-repo>/packages/cli/bin.mjs render <file> -o <out.html>`，把 HTML 路径给用户。HTML 默认打开为**演示态**（无点阵网格、无折叠点、无控制点手柄，节点不可拖）；顶部「编辑」可切到编辑态，拖动后点「下载源码」拿回带坐标的 `.blockml`。分组折叠与「图层」隐藏只影响视图，不写回文件。
+6. **需要另一套整体排法时**（可选）：`node <blockml-repo>/packages/cli/bin.mjs layout <file> --algo layered|pipeline|snowflake|compact --write`。这是破坏性重排，会覆盖所有已有坐标；不要为了「微调」跑它。
 
-> 排列算法：`layered`（按组分层）、`pipeline`（按组声明顺序）、`snowflake`（中心放射）、`compact`（网格）。重排会覆盖手工坐标，只保留连线曲率。
-> 走线风格：`diagram { route: orthogonal }` 切到 draw.io 式正交布线（转折圆角、跨线处上层线画小圆弧、线体不重叠；同侧入站/出站各占一个吸附点，`via` 不生效）；默认 `curve` 贝塞尔。连线颜色跟随两端节点 kind：起点浅、终点实，箭头取终点色。两种风格都不会让线穿过非端点节点：正交先换车道，曲线先换进出边，仍绕不开才退化为圆角折线。
-> 汇流：一个节点连同一组里的多个对端时，给这几条边加同名 `bundle: <name>`，正交走线下会画成一条主干再分叉；主干会穿过其它节点时只保留共享吸附点，各边分别绕行。
+> 走线风格是查看器预设，不是文档语义：`render <file> --route orthogonal` 生成 draw.io 式正交布线，默认 `curve` 贝塞尔。不要在 `.blockml` 里写 `route:`。
+> 两种风格共用侧端口：同一侧 ≥3 条边也只有一入一出两个普通附着点；端点沿边框法线出线（偏差 ≤0.5°）；标签不压节点/组头/其它标签；线不穿过非端点节点；交叉统一跳弧。这些都由平台保证，不要用 `via` 去「修」。
+> 汇流：一个节点连同一组里的多个对端时，给这几条边加同名 `bundle: <name>`，会画成一条主干再分叉；`curve` 与 `orthogonal` 都生效。主干会穿过其它节点时只保留共享吸附点，各边分别绕行。
 > 仓库在本地时用上面的完整路径；把 `@block-ml/cli` 装到 PATH 之后，可以直接用 `blockml validate` / `blockml render`。
 > 首次使用前先在该仓库跑一次 `pnpm install && pnpm build`，否则 `packages/*/dist` 不存在。
 
@@ -35,17 +35,21 @@ diagram {
   title: "订单系统"
 }
 
-group edge "接入层" {
-  color: #f59e0b
-}
+group access "接入层"
+group core "核心服务"
 
 node gw "api-gateway" {
-  group: edge
+  group: access
   kind: service
   tech: "Spring Cloud Gateway 8080"
-  at: 200, 80
   note: "浏览器只访问它；下游不直接暴露"
   src: "docs/deploy.md:18-24"
+}
+
+node order "order-service" {
+  group: core
+  kind: service
+  tech: "Go 1.22 · 8081"
 }
 
 edge gw -> order "REST /v1/orders" {
@@ -61,10 +65,10 @@ edge gw -> order "REST /v1/orders" {
 | 规则 | 原因 |
 | --- | --- |
 | 一块图 6–16 个节点 | 超过就分成「全景 + 局部」两张 |
-| 一个 `group` 只装同一层的东西，节点在空间上聚在一起 | 组框是成员节点的包围盒，散开会让框互相穿插 |
+| 一个 `group` 只装同一层的东西 | 组框是成员节点的包围盒，层级混在一起会散 |
 | `tech` 只写一行、≤ 24 字 | 卡片里放不下，详情面板才有 `note` |
-| 坐标写整数 | 手改时好读，diff 也小 |
-| 同一对节点多条边时，给每条不同的 `via` | 否则线会叠在一起 |
+| 不写 `at` / `via` / `dash` / `color` / `theme` / `route` | 这些是编辑器回写或旧文件兼容键；新文档只留语义 |
+| 同一对节点多条边不用手写偏移 | 平台自动分配端口并错开 |
 | 不确定的 kind 用 `ext` | 未知 kind 会降级并产生 warning |
 | 自定义字段一律加 `x-` 前缀 | 未知属性只报 warning，但会丢值 |
 
@@ -76,8 +80,8 @@ edge gw -> order "REST /v1/orders" {
 - [ ] 节点数 ≤ 16，每个节点都回答了「它是什么」
 - [ ] 每条边都有协议/通道类型的 `kind`
 - [ ] 关键事实带 `src`
-- [ ] 没有两个组框重叠
-- [ ] 渲染出的 HTML 能打开、能拖动、拖动后源码有变化
+- [ ] 渲染出的 HTML 默认是演示态：无网格、无折叠点、无控制点手柄
+- [ ] 点「编辑」后能拖动，拖动后源码有变化；切回「预览」后画布干净
 
 ## 配套文件
 

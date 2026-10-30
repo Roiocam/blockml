@@ -2,11 +2,10 @@ import {
   applyLayout,
   alignBoxes,
   anchorPoint,
+  defaultLayout,
   distributeBoxes,
   parse,
   DEFAULT_BOX,
-  autoLayout,
-  bezierAt,
   boxOf,
   contentBounds,
   edgeDisplayName,
@@ -21,26 +20,30 @@ import {
   isNodeVisible,
   layoutDocument,
   nodeDisplayName,
-  planSidePorts,
+  pathMetrics,
+  placeLabelOnPath,
+  planCurveSides,
+  planPorts,
+  pointAtLength,
+  primarySide,
   relatedEdges,
   relatedNodes,
   nodeKindStyle,
-  pathOf,
-  primarySide,
   resolveVisibility,
   routeCrosses,
+  sampleEdgePath,
   serialize,
   sideAlong,
   sideMidpoint,
-  sideRange,
+  sideNormal,
   snapAlignment,
   visibleEdges,
   visibleGroups,
   visibleNodes,
-  GROUP_HEAD,
-  GROUP_PAD,
+  GROUP_PALETTE,
   type AlignmentGuide,
   type BlockDocument,
+  type CurveJunction,
   type Diagnostic,
   type EdgeDecl,
   type EdgeSide,
@@ -50,14 +53,18 @@ import {
   type NodeDecl,
   type NodeBox,
   type LayoutAlgorithm,
+  type LabelPlacement,
   type OrthogonalRoute,
   type ParseResult,
+  type PathMetrics,
   type Point,
-  type PortGroup,
+  type PortAssignment,
   type Rect,
   type RouteStyle,
+  type SideUse,
   type Visibility,
 } from "@block-ml/core";
+import { computeHops, computePolylineHops, edgePath, polylinePath } from "./paths.js";
 import { VIEWER_CSS } from "./styles.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
@@ -74,6 +81,18 @@ export interface ViewerOptions {
   theme?: "light" | "dark";
   showLegend?: boolean;
   showInspector?: boolean;
+  /**
+   * `editing` keeps the dot grid, group fold dots, bend handles and drag
+   * interactions. `presentation` is the delivered figure: no editing chrome,
+   * no accidental drags, but selection and the inspector still work.
+   * Defaults to `editing` so embedding editors keep their current behaviour.
+   */
+  mode?: "presentation" | "editing";
+  /**
+   * Route preset for this view. Overrides the legacy `diagram.route` key; both
+   * styles satisfy the same port/normal/label contract.
+   */
+  route?: RouteStyle;
   /**
    * Smart guides while dragging: pull a node onto another node's border or
    * centre line. Defaults to true; hold Alt while dragging to move freely.
@@ -104,6 +123,9 @@ export interface ViewerHandle {
   update(source: string): void;
   getSource(): string;
   setReadOnly(readOnly: boolean): void;
+  /** Switch between the delivered figure and the editable canvas. */
+  setMode(mode: "presentation" | "editing"): void;
+  getMode(): "presentation" | "editing";
   fit(): void;
   zoomTo(scale: number): void;
   layout(algorithm: LayoutAlgorithm): void;
@@ -205,11 +227,13 @@ class Viewer implements ViewerHandle {
   private diagnostics: Diagnostic[] = [];
   private view = { x: 40, y: 20, k: 1 };
   private routeStyle: RouteStyle = "curve";
+  private mode: "presentation" | "editing";
   private selectedNode: string | null = null;
   private selectedNodes = new Set<string>();
   private selectedEdge: string | null = null;
   private pointerSelected = false;
-  private fans = new Map<string, { from?: number; to?: number }>();
+  private junctions = new Map<string, CurveJunction>();
+  private edgePaths = new Map<string, PathMetrics>();
   private bundleOf = new Map<string, string>();
   private bundleGroups: BundleGroup[] = [];
   private bundleInfo = new Map<
@@ -238,10 +262,12 @@ class Viewer implements ViewerHandle {
     injectStyles();
     this.options = options;
     this.source = options.source;
+    this.mode = options.mode ?? "editing";
 
     this.root = document.createElement("div");
     this.root.className = "bml-root";
     this.root.dataset.bmlTheme = options.theme ?? "light";
+    this.root.classList.add(this.mode === "presentation" ? "bml-presentation" : "bml-editing");
     if (options.readOnly) this.root.classList.add("bml-readonly");
     target.appendChild(this.root);
 
@@ -323,7 +349,9 @@ class Viewer implements ViewerHandle {
 
     const doc = result.document;
     // Fill missing positions in memory only; the source file stays untouched.
-    const layout = autoLayout(doc);
+    // A document with no persisted layout gets the layered algorithm, so the
+    // first render already reads as an architecture map.
+    const layout = defaultLayout(doc);
     for (const node of doc.nodes) {
       if (!node.at) node.at = layout.get(node.id) ?? { x: 0, y: 0 };
     }
@@ -380,6 +408,17 @@ class Viewer implements ViewerHandle {
       y = Math.min(y, chip.y);
       x1 = Math.max(x1, chip.x + chip.w);
       y1 = Math.max(y1, chip.y + chip.h);
+    }
+    // Curves can bow outside the node boxes and labels sit on the path; fit the
+    // view to what is actually drawn so no label is cropped at the border.
+    for (const layer of [this.edgeLayer, this.labelLayer]) {
+      if (typeof layer.getBBox !== "function" || !layer.childElementCount) continue;
+      const box = layer.getBBox();
+      if (!Number.isFinite(box.x) || !Number.isFinite(box.y) || (!box.width && !box.height)) continue;
+      x = Math.min(x, box.x);
+      y = Math.min(y, box.y);
+      x1 = Math.max(x1, box.x + box.width);
+      y1 = Math.max(y1, box.y + box.height);
     }
     return { x, y, w: x1 - x, h: y1 - y };
   }
@@ -494,10 +533,11 @@ class Viewer implements ViewerHandle {
 
   private render(): void {
     if (!this.doc || !this.viewDoc) return;
-    this.routeStyle = this.doc.diagram?.route ?? "curve";
+    this.routeStyle = this.options.route ?? this.doc.diagram?.route ?? "curve";
     this.nodeEls.clear();
     this.edgeEls.clear();
     this.groupEls.clear();
+    this.edgePaths.clear();
     this.placedLabels = [];
     this.groupLayer.innerHTML = "";
     this.edgeLayer.innerHTML = "";
@@ -508,10 +548,13 @@ class Viewer implements ViewerHandle {
     this.guideLayer.innerHTML = "";
     this.overlayLayer.innerHTML = "";
 
-    const grid = el("rect", {
-      x: -8000, y: -8000, width: 16000, height: 16000, fill: "url(#bml-grid)",
-    });
-    this.groupLayer.appendChild(grid);
+    // The dot grid is an editing aid; a delivered figure must not carry it.
+    if (this.mode === "editing") {
+      const grid = el("rect", {
+        x: -8000, y: -8000, width: 16000, height: 16000, fill: "url(#bml-grid)",
+      });
+      this.groupLayer.appendChild(grid);
+    }
 
     this.renderGroups();
     this.renderEdges();
@@ -533,7 +576,10 @@ class Viewer implements ViewerHandle {
       if (!collapsed && !shown.length) continue;
 
       const box = collapsed ? this.collapseChip(full) : groupBoundingBox(shown)!;
-      const color = group.color ?? "#64748b";
+      // Colour is a view preset now: an explicit legacy colour still wins, and
+      // otherwise groups cycle through the palette by declaration order.
+      const index = this.doc.groups.findIndex((item) => item.id === group.id);
+      const color = group.color ?? GROUP_PALETTE[Math.max(0, index) % GROUP_PALETTE.length]!;
       const label = group.label ?? group.title;
 
       const rect = el("rect", {
@@ -592,7 +638,9 @@ class Viewer implements ViewerHandle {
         event.stopPropagation();
         this.toggleGroupCollapsed(group.id);
       });
-      this.uiLayer.appendChild(toggle);
+      // Fold dots are an editing affordance; presentation keeps the frame but
+      // not the controls.
+      if (this.mode === "editing") this.uiLayer.appendChild(toggle);
 
       this.groupEls.set(group.id, { rect, text, toggle, sign });
     }
@@ -601,71 +649,22 @@ class Viewer implements ViewerHandle {
   private edgeGeometryOf(
     edge: EdgeDecl,
     obstacles?: { id: string; rect: Rect }[],
+    soft: Rect[] = [],
   ): EdgeGeometry | null {
     if (!this.viewDoc) return null;
     return edgeGeometry(edge, {
       byId: this.nodeMap(),
       pairs: indexPairs(this.viewDoc),
-      fans: this.fans,
       obstacles,
+      soft,
+      anchors: this.forcedAnchors,
+      junctions: this.junctions,
+      trunks: this.trunks,
     });
   }
 
   private nodeMap(): Map<string, NodeDecl> {
     return new Map(this.viewDoc?.nodes.map((n) => [n.id, n]) ?? []);
-  }
-
-  /**
-   * Edges that meet at a node fan out along its border instead of leaving from
-   * the same anchor point, so they never draw on top of each other. Offsets
-   * follow the anchor's position along the border — sorting by target angle
-   * would invert the order and cancel the spread.
-   */
-  private computeFans(): void {
-    this.fans = new Map();
-    if (!this.viewDoc) return;
-    const nodes = this.nodeMap();
-    type FanItem = { edge: EdgeDecl; end: "from" | "to"; side: EdgeSide; box: Rect; along: number };
-    const groups = new Map<string, FanItem[]>();
-    const push = (nodeId: string, item: FanItem) => {
-      const key = `${nodeId}\u0000${item.side}`;
-      const list = groups.get(key);
-      if (list) list.push(item);
-      else groups.set(key, [item]);
-    };
-    for (const edge of this.viewDoc.edges) {
-      const from = nodes.get(edge.from);
-      const to = nodes.get(edge.to);
-      if (!from || !to) continue;
-      const fc = boxOf(from);
-      const tc = boxOf(to);
-      const a1 = anchorPoint(from, { x: tc.cx, y: tc.cy });
-      const a2 = anchorPoint(to, { x: fc.cx, y: fc.cy });
-      const s1 = edgeSide(a1, fc);
-      const s2 = edgeSide(a2, tc);
-      const along = (point: Point, side: EdgeSide) => (side === "top" || side === "bottom" ? point.x : point.y);
-      push(edge.from, { edge, end: "from", side: s1, box: fc, along: along(a1, s1) });
-      push(edge.to, { edge, end: "to", side: s2, box: tc, along: along(a2, s2) });
-    }
-    for (const list of groups.values()) {
-      if (list.length < 2) continue;
-      list.sort((a, b) => a.along - b.along);
-      const box = list[0]!.box;
-      const range = sideRange(box, list[0]!.side as EdgeSide);
-      // Targets are laid out inside the usable border span, so the offsets
-      // themselves never clamp at the ends and collapse two anchors together.
-      const step = Math.min(14, (range.max - range.min) / (list.length - 1));
-      const span = step * (list.length - 1);
-      const midpoint = (list[0]!.along + list[list.length - 1]!.along) / 2;
-      const start = clamp(midpoint - span / 2, range.min, range.max - span);
-      list.forEach((item, index) => {
-        const offset = Math.round(start + index * step - item.along);
-        if (!offset) return;
-        const slot = this.fans.get(item.edge.id) ?? {};
-        slot[item.end] = offset;
-        this.fans.set(item.edge.id, slot);
-      });
-    }
   }
 
   /**
@@ -828,34 +827,53 @@ class Viewer implements ViewerHandle {
   }
 
   /**
-   * Ports are assigned after a first routing pass: only sides that actually
-   * carry edges are considered, and inbound/outbound edges on one side get
-   * separate attachment points while their own groups still share one. Bundles
-   * keep their own point on the same rail. The final pass is pinned to these
-   * ports, so a line entering a node can never sit on a line leaving it.
+   * Shared port rail for both route styles. Every node border gets one port per
+   * direction plus one per bundle; the assignments are written back into the
+   * forced-anchor map the geometry reads.
+   */
+  private applyPortAssignments(assignments: PortAssignment[]): void {
+    for (const assignment of assignments) {
+      const forced = this.forcedAnchors.get(assignment.edgeId) ?? {};
+      forced[assignment.end] = { point: assignment.point, side: assignment.side };
+      this.forcedAnchors.set(assignment.edgeId, forced);
+      if (!assignment.bundle) continue;
+      const info = this.bundleInfo.get(assignment.edgeId);
+      if (info) {
+        info.sharedX = assignment.point.x;
+        info.sharedY = assignment.point.y;
+      }
+    }
+  }
+
+  /**
+   * Ports are assigned after a first orthogonal routing pass: only sides that
+   * actually carry edges are considered, and inbound/outbound edges on one side
+   * get separate attachment points while their own groups still share one.
+   * Bundles keep their own point on the same rail.
    */
   private computePorts(baseline: Map<string, OrthogonalRoute>): void {
     if (!this.viewDoc) return;
     const nodes = this.nodeMap();
     const boxes = new Map([...nodes].map(([id, node]) => [id, boxOf(node)]));
-    type SideUse = {
-      box: NodeBox;
-      ins: EdgeDecl[];
-      outs: EdgeDecl[];
-      bundles: BundleGroup[];
-    };
     const uses = new Map<string, SideUse>();
     const useOf = (nodeId: string, side: EdgeSide): SideUse => {
       const key = `${nodeId}\u0000${side}`;
       let use = uses.get(key);
       if (!use) {
-        use = { box: boxes.get(nodeId)!, ins: [], outs: [], bundles: [] };
+        use = { box: boxes.get(nodeId)!, side, ins: [], outs: [], bundles: [] };
         uses.set(key, use);
       }
       return use;
     };
     for (const group of this.bundleGroups) {
-      useOf(group.nodeId, group.side).bundles.push(group);
+      const box = boxes.get(group.nodeId);
+      if (!box) continue;
+      useOf(group.nodeId, group.side).bundles.push({
+        key: `bundle:${group.name}`,
+        desired: sideAlong(box, group.side, group.centroid),
+        edges: group.edges,
+        end: group.end,
+      });
     }
     for (const edge of this.viewDoc.edges) {
       const route = baseline.get(edge.id);
@@ -865,62 +883,115 @@ class Viewer implements ViewerHandle {
       if (!fromBox || !toBox) continue;
       const bundled = this.bundleInfo.get(edge.id)?.end;
       if (bundled !== "from") {
-        useOf(edge.from, edgeSide(route.points[0]!, fromBox)).outs.push(edge);
+        const side = edgeSide(route.points[0]!, fromBox);
+        useOf(edge.from, side).outs.push({
+          edge,
+          desired: sideAlong(fromBox, side, { x: toBox.cx, y: toBox.cy }),
+        });
       }
       if (bundled !== "to") {
         const last = route.points[route.points.length - 1]!;
-        useOf(edge.to, edgeSide(last, toBox)).ins.push(edge);
+        const side = edgeSide(last, toBox);
+        useOf(edge.to, side).ins.push({
+          edge,
+          desired: sideAlong(toBox, side, { x: fromBox.cx, y: fromBox.cy }),
+        });
       }
     }
+    this.applyPortAssignments(planPorts([...uses.values()]));
+  }
 
-    for (const [key, use] of uses) {
-      const side = key.slice(key.indexOf("\u0000") + 1) as EdgeSide;
-      const groups: PortGroup[] = use.bundles.map((bundle) => ({
-        key: `bundle:${bundle.name}`,
-        desired: sideAlong(use.box, side, bundle.centroid),
-      }));
-      const bundles = new Map(use.bundles.map((bundle) => [`bundle:${bundle.name}`, bundle]));
-      if (use.ins.length) {
-        const desired =
-          use.ins.reduce((sum, edge) => {
-            const other = boxes.get(edge.from);
-            return sum + (other ? sideAlong(use.box, side, { x: other.cx, y: other.cy }) : 0);
-          }, 0) / use.ins.length;
-        groups.push({ key: "in", desired });
-      }
-      if (use.outs.length) {
-        const desired =
-          use.outs.reduce((sum, edge) => {
-            const other = boxes.get(edge.to);
-            return sum + (other ? sideAlong(use.box, side, { x: other.cx, y: other.cy }) : 0);
-          }, 0) / use.outs.length;
-        groups.push({ key: "out", desired });
-      }
-      if (!groups.length) continue;
+  /**
+   * Curve routing shares the same ports. Sides come from the dominant relative
+   * direction (so a layered layout exits right and enters left), bundles keep
+   * the side computed by computeBundles, and a validated trunk point turns a
+   * bundle into one shared run plus branches.
+   */
+  /**
+   * Choose which border each curve end leaves from. The dominant-direction pair
+   * wins when it stays compact and clear; the orthogonal router is the fallback
+   * for a stacked pair that needs to go around a blocker.
+   */
+  private curveSides(
+    nodeObstacles: { id: string; rect: Rect }[],
+    soft: Rect[],
+  ): Map<string, { from?: EdgeSide; to?: EdgeSide }> {
+    if (!this.viewDoc) return new Map();
+    return planCurveSides(this.viewDoc, {
+      obstacles: nodeObstacles,
+      soft,
+      anchors: this.forcedAnchors,
+    });
+  }
 
-      for (const port of planSidePorts(use.box, side, groups)) {
-        const bundle = bundles.get(port.key);
-        if (bundle) {
-          for (const edge of bundle.edges) {
-            const forced = this.forcedAnchors.get(edge.id) ?? {};
-            forced[bundle.end] = { point: port.point, side };
-            this.forcedAnchors.set(edge.id, forced);
-            const info = this.bundleInfo.get(edge.id);
-            if (info) {
-              info.sharedX = port.point.x;
-              info.sharedY = port.point.y;
-            }
-          }
-          continue;
-        }
-        if (port.key !== "in" && port.key !== "out") continue;
-        const end = port.key === "in" ? "to" : "from";
-        const list = port.key === "in" ? use.ins : use.outs;
-        for (const edge of list) {
-          const forced = this.forcedAnchors.get(edge.id) ?? {};
-          forced[end] = { point: port.point, side };
-          this.forcedAnchors.set(edge.id, forced);
-        }
+  private buildCurveRoutes(nodeObstacles: { id: string; rect: Rect }[], soft: Rect[]): void {
+    if (!this.viewDoc) return;
+    this.computeBundles(nodeObstacles);
+    this.junctions = new Map();
+    const nodes = this.nodeMap();
+    const boxes = new Map([...nodes].map(([id, node]) => [id, boxOf(node)]));
+    const sides = this.curveSides(nodeObstacles, soft);
+    const uses = new Map<string, SideUse>();
+    const useOf = (nodeId: string, side: EdgeSide): SideUse => {
+      const key = `${nodeId}\u0000${side}`;
+      let use = uses.get(key);
+      if (!use) {
+        use = { box: boxes.get(nodeId)!, side, ins: [], outs: [], bundles: [] };
+        uses.set(key, use);
+      }
+      return use;
+    };
+    for (const group of this.bundleGroups) {
+      const box = boxes.get(group.nodeId);
+      if (!box) continue;
+      useOf(group.nodeId, group.side).bundles.push({
+        key: `bundle:${group.name}`,
+        desired: sideAlong(box, group.side, group.centroid),
+        edges: group.edges,
+        end: group.end,
+      });
+    }
+    for (const edge of this.viewDoc.edges) {
+      const fromBox = boxes.get(edge.from);
+      const toBox = boxes.get(edge.to);
+      if (!fromBox || !toBox) continue;
+      const bundled = this.bundleInfo.get(edge.id)?.end;
+      if (bundled !== "from") {
+        const side = sides.get(edge.id)?.from ?? primarySide(fromBox, toBox);
+        useOf(edge.from, side).outs.push({
+          edge,
+          desired: sideAlong(fromBox, side, { x: toBox.cx, y: toBox.cy }),
+        });
+      }
+      if (bundled !== "to") {
+        const side = sides.get(edge.id)?.to ?? primarySide(toBox, fromBox);
+        useOf(edge.to, side).ins.push({
+          edge,
+          desired: sideAlong(toBox, side, { x: fromBox.cx, y: fromBox.cy }),
+        });
+      }
+    }
+    this.applyPortAssignments(planPorts([...uses.values()]));
+
+    // A bundle trunk is a short run along the shared normal. If that run would
+    // cut a node, keep the shared port but drop the trunk rather than draw
+    // through a box.
+    for (const group of this.bundleGroups) {
+      const first = group.edges[0];
+      if (!first) continue;
+      const anchor = this.forcedAnchors.get(first.id)?.[group.end];
+      if (!anchor) continue;
+      const normal = sideNormal(anchor.side);
+      const point = {
+        x: anchor.point.x + normal.x * 30,
+        y: anchor.point.y + normal.y * 30,
+      };
+      const blockers = nodeObstacles
+        .filter((item) => item.id !== group.nodeId)
+        .map((item) => item.rect);
+      if (routeCrosses([anchor.point, point], blockers, 2)) continue;
+      for (const edge of group.edges) {
+        this.junctions.set(edge.id, { point, side: anchor.side, end: group.end });
       }
     }
   }
@@ -1048,11 +1119,11 @@ class Viewer implements ViewerHandle {
   ): Map<string, OrthogonalRoute> {
     if (!this.viewDoc) return new Map();
     this.computeBundles(nodeObstacles);
+    this.junctions = new Map();
     const edges = this.viewDoc.edges;
     const ctx = {
       byId: this.nodeMap(),
       pairs: indexPairs(this.viewDoc),
-      fans: this.fans,
       obstacles: nodeObstacles,
       soft,
       anchors: this.forcedAnchors,
@@ -1124,19 +1195,18 @@ class Viewer implements ViewerHandle {
    * Positions along each route that sit on another edge. A label anchored there
    * would name a line that belongs to someone else.
    */
-  private foreignMarks(paths: Map<string, PolyPath>): Map<string, boolean[]> {
+  private foreignMarks(paths: Map<string, PathMetrics>): Map<string, boolean[]> {
     const out = new Map<string, boolean[]>();
     if (paths.size < 2) return out;
     const SAMPLES = 160;
     const routes = [...paths];
-    const on = (point: Point, start: Point, end: Point): boolean => {
-      const horizontal = Math.abs(start.y - end.y) < 0.5;
-      if (horizontal) {
-        if (Math.abs(point.y - start.y) > 1.5) return false;
-        return point.x >= Math.min(start.x, end.x) - 1 && point.x <= Math.max(start.x, end.x) + 1;
-      }
-      if (Math.abs(point.x - start.x) > 1.5) return false;
-      return point.y >= Math.min(start.y, end.y) - 1 && point.y <= Math.max(start.y, end.y) + 1;
+    const near = (point: Point, start: Point, end: Point): boolean => {
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const length = Math.hypot(dx, dy);
+      if (!length) return Math.hypot(point.x - start.x, point.y - start.y) < 1.5;
+      const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (length * length)));
+      return Math.hypot(point.x - (start.x + dx * t), point.y - (start.y + dy * t)) < 1.5;
     };
     for (const [id, path] of routes) {
       const marks: boolean[] = new Array(SAMPLES + 1).fill(false);
@@ -1146,7 +1216,7 @@ class Viewer implements ViewerHandle {
           if (otherId === id) continue;
           const points = other.points;
           for (let j = 0; j < points.length - 1; j++) {
-            if (on(point, points[j]!, points[j + 1]!)) {
+            if (near(point, points[j]!, points[j + 1]!)) {
               marks[k] = true;
               break;
             }
@@ -1159,8 +1229,8 @@ class Viewer implements ViewerHandle {
     return out;
   }
 
-  /** Label window that keeps bundled labels off the shared trunk. */
-  private bundleLabelRange(path: PolyPath, edgeId: string): [number, number] | undefined {
+  /** Label window that keeps bundled labels off the shared orthogonal trunk. */
+  private bundleLabelRange(path: PathMetrics, edgeId: string): [number, number] | undefined {
     const info = this.bundleInfo.get(edgeId);
     if (!info?.trunk) return undefined;
     const axis = info.trunk.x !== undefined ? "x" : "y";
@@ -1183,45 +1253,74 @@ class Viewer implements ViewerHandle {
     return path.total ? [0, Math.max(0, end / path.total)] : undefined;
   }
 
-  private renderEdges(): void {
-    if (!this.doc || !this.viewDoc) return;
-    this.computeFans();
-    const { labels: obstacles, routes: routeObstacles, soft } = this.collectObstacles();
-    const nodes = this.nodeMap();
-    this.renderEdgeDefs(nodes);
+  /** Label window that keeps a curve bundle's label off its shared trunk. */
+  private curveBundleLabelRange(geo: EdgeGeometry, edgeId: string): [number, number] | undefined {
+    const info = this.bundleInfo.get(edgeId);
+    if (!info || !this.junctions.has(edgeId)) return undefined;
+    const path = this.edgePaths.get(edgeId);
+    if (!path?.total) return undefined;
+    const margin = 10;
+    if (info.end === "from") {
+      const trunk = Math.hypot(geo.control.x - geo.p1.x, geo.control.y - geo.p1.y);
+      return [Math.min(1, (trunk + margin) / path.total), 1];
+    }
+    const trunk = Math.hypot(geo.p2.x - geo.control.x, geo.p2.y - geo.control.y);
+    return [0, Math.max(0, (path.total - trunk - margin) / path.total)];
+  }
 
+  /** Route every edge for the current style and collect label/hop paths. */
+  private routeGeometry(): {
+    obstacles: Rect[];
+    geos: Map<string, EdgeGeometry>;
+    paths: Map<string, PathMetrics>;
+    hops: Map<string, number[]> | null;
+    orthHops: Map<string, number[]> | null;
+  } {
+    const { labels: obstacles, routes: routeObstacles, soft } = this.collectObstacles();
     const orthogonal = this.routeStyle === "orthogonal";
     const geos = new Map<string, EdgeGeometry>();
-    const routePaths = new Map<string, PolyPath>();
-    let routes: Map<string, OrthogonalRoute> | null = null;
+    const paths = new Map<string, PathMetrics>();
+    let hops: Map<string, number[]> | null = null;
+    let orthHops: Map<string, number[]> | null = null;
+    if (!this.viewDoc) return { obstacles, geos, paths, hops, orthHops };
     if (orthogonal) {
-      routes = this.buildOrthogonalRoutes(routeObstacles, soft);
-      for (const [id, route] of routes) routePaths.set(id, pathMetrics(route.points));
+      const routes = this.buildOrthogonalRoutes(routeObstacles, soft);
+      for (const [id, route] of routes) paths.set(id, pathMetrics(route.points));
+      orthHops = computePolylineHops(this.viewDoc.edges, routes);
     } else {
+      this.buildCurveRoutes(routeObstacles, soft);
       for (const edge of this.viewDoc.edges) {
-        const geo = this.edgeGeometryOf(edge, routeObstacles);
-        if (geo) geos.set(edge.id, geo);
+        const geo = this.edgeGeometryOf(edge, routeObstacles, soft);
+        if (!geo) continue;
+        geos.set(edge.id, geo);
+        paths.set(edge.id, pathMetrics(sampleEdgePath(geo, 96)));
       }
+      hops = computeHops(this.viewDoc.edges, geos);
     }
-    const hops = orthogonal ? null : computeHops(this.viewDoc.edges, geos);
-    const orthHops = routes ? computePolylineHops(this.viewDoc.edges, routes) : null;
-    const foreign = this.foreignMarks(routePaths);
+    return { obstacles, geos, paths, hops, orthHops };
+  }
+
+  private renderEdges(): void {
+    if (!this.doc || !this.viewDoc) return;
+    const orthogonal = this.routeStyle === "orthogonal";
+    const geometry = this.routeGeometry();
+    this.edgePaths = geometry.paths;
+    const nodes = this.nodeMap();
+    this.renderEdgeDefs(nodes);
+    const foreign = this.foreignMarks(geometry.paths);
 
     let paintIndex = 0;
     for (const edge of this.viewDoc.edges) {
-      const path = routePaths.get(edge.id);
-      const geo = geos.get(edge.id);
-      if (orthogonal ? !path : !geo) continue;
+      const path = geometry.paths.get(edge.id);
+      const geo = geometry.geos.get(edge.id);
+      if (!path || (!orthogonal && !geo)) continue;
       const style = edgeKindStyle(edge.kind);
       const dash = edge.dash === null ? style.dash ?? "" : edge.dash ? "6 4" : "";
-      const detour = geo?.detour;
       const d = orthogonal
-        ? polylinePath(path!.points, orthHops?.get(edge.id))
-        : detour
-          ? polylinePath(detour)
-          : edgePath(geo!, hops!.get(edge.id));
-      const start = orthogonal ? path!.points[0]! : geo!.p1;
-      const end = orthogonal ? path!.points[path!.points.length - 1]! : geo!.p2;
+        ? polylinePath(path.points, geometry.orthHops?.get(edge.id))
+        : edgePath(geo!, geometry.hops?.get(edge.id));
+      const start = path.points[0]!;
+      const end = path.points[path.points.length - 1]!;
       const paint = this.edgePaint(edge, start, end, nodes, paintIndex++);
       const arrowKind = nodes.get(edge.to)?.kind ?? "ext";
 
@@ -1241,23 +1340,23 @@ class Viewer implements ViewerHandle {
       const font = `500 10.5px ${getComputedStyle(this.root).fontFamily}`;
       const shown = truncate(labelText, font, 260);
       const width = shown ? textWidth(shown, font) : 0;
-      const labelPath = path ?? (detour ? pathMetrics(detour) : undefined);
-      const placed = labelPath
-        ? placeLabelOnPath(
-            labelPath,
-            width,
-            17,
-            obstacles,
-            this.placedLabels,
-            path ? this.bundleLabelRange(path, edge.id) : undefined,
-            foreign.get(edge.id),
-          )
-        : placeLabel(geo!, width, 17, obstacles, this.placedLabels);
-      this.placedLabels.push(placed.rect);
-      (edge as EdgeDecl & { __labelT?: number; __labelOff?: number }).__labelT = placed.t;
-      (edge as EdgeDecl & { __labelOff?: number }).__labelOff = placed.offset;
-
+      let t = 0.5;
+      let offset = 0;
       if (shown) {
+        const range = orthogonal
+          ? this.bundleLabelRange(path, edge.id)
+          : this.curveBundleLabelRange(geo!, edge.id);
+        const placed = placeLabelOnPath(
+          path,
+          width,
+          17,
+          geometry.obstacles,
+          this.placedLabels,
+          { range, avoid: foreign.get(edge.id) },
+        );
+        this.placedLabels.push(placed.rect);
+        t = placed.t;
+        offset = placed.offset;
         el("rect", {
           x: placed.x - width / 2 - 5, y: placed.y - 8.5, width: width + 10, height: 17, rx: 4,
           class: "bml-edge-label-bg",
@@ -1268,6 +1367,8 @@ class Viewer implements ViewerHandle {
         text.textContent = shown;
       }
       this.labelLayer.appendChild(labelGroup);
+      (edge as EdgeDecl & { __labelT?: number; __labelOff?: number }).__labelT = t;
+      (edge as EdgeDecl & { __labelOff?: number }).__labelOff = offset;
 
       const onDown = (event: PointerEvent) => {
         if (event.button !== 0) return;
@@ -1394,7 +1495,7 @@ class Viewer implements ViewerHandle {
       const target = event.target as Element;
       if (target.closest(".bml-node") || target.closest(".bml-edge")) return;
       // Shift+drag on the canvas draws a selection rectangle; plain drag still pans.
-      if (event.shiftKey && this.viewDoc && !this.options.readOnly) {
+      if (event.shiftKey && this.viewDoc && !this.options.readOnly && this.mode === "editing") {
         event.preventDefault();
         this.selectEdge(null);
         this.startMarquee(event);
@@ -1513,7 +1614,7 @@ class Viewer implements ViewerHandle {
 
   private startNodeDrag(event: PointerEvent, node: NodeDecl): void {
     if (event.button !== 0) return;
-    if (this.options.readOnly) return;
+    if (this.options.readOnly || this.mode !== "editing") return;
     event.stopPropagation();
 
     const additive = event.shiftKey || event.ctrlKey || event.metaKey;
@@ -1531,9 +1632,6 @@ class Viewer implements ViewerHandle {
     const moving = this.viewDoc?.nodes.filter((n) => this.selectedNodes.has(n.id) && n.at) ?? [];
     if (!moving.length) return;
     const origins = new Map(moving.map((n) => [n.id, { x: n.at!.x, y: n.at!.y }]));
-    const affected = this.viewDoc?.edges.filter(
-      (e) => this.selectedNodes.has(e.from) || this.selectedNodes.has(e.to),
-    ) ?? [];
     // Positions and neighbour boxes are fixed for the whole gesture, so every
     // move re-uses them instead of re-measuring the already dragged nodes.
     const movingBoxes = moving.map((n) => boxOf(n));
@@ -1569,12 +1667,8 @@ class Viewer implements ViewerHandle {
         this.nodeEls.get(n.id)?.setAttribute("transform", `translate(${x} ${y})`);
       }
       if (!moved) return;
-      if (this.routeStyle === "orthogonal") {
-        this.refreshEdgePaths();
-      } else {
-        for (const edge of affected) this.refreshEdge(edge);
-        this.refreshEdgePaths();
-      }
+      // Ports are shared, so moving one node can re-side every edge on it.
+      this.refreshEdgePaths();
       this.refreshGroups();
     };
 
@@ -1614,8 +1708,11 @@ class Viewer implements ViewerHandle {
   }
 
   private startBendDrag(event: PointerEvent, edge: EdgeDecl): void {
-    if (event.button !== 0 || this.options.readOnly) return;
+    if (event.button !== 0 || this.options.readOnly || this.mode !== "editing") return;
     if (this.routeStyle === "orthogonal") return;
+    // A bundled curve's shared control point belongs to the whole bundle, not
+    // to one edge; `via` is a single-edge escape hatch only.
+    if (this.junctions.has(edge.id)) return;
     event.stopPropagation();
     const start = this.toWorld(event.clientX, event.clientY);
     const base = edge.via ?? { x: 0, y: 0 };
@@ -1627,7 +1724,6 @@ class Viewer implements ViewerHandle {
         x: Math.round(origin.x + (p.x - start.x)),
         y: Math.round(origin.y + (p.y - start.y)),
       };
-      this.refreshEdge(edge);
       this.refreshEdgePaths();
       this.refreshBendHandle();
     };
@@ -1643,45 +1739,31 @@ class Viewer implements ViewerHandle {
     window.addEventListener("pointerup", onUp);
   }
 
-  /** Rebuild every edge path; hops depend on where edges cross each other. */
+  /** Rebuild every edge path; ports, labels and hops all follow node positions. */
   private refreshEdgePaths(): void {
     if (!this.viewDoc) return;
-    if (this.routeStyle === "orthogonal") {
-      const obstacles = this.collectObstacles();
-      const routes = this.buildOrthogonalRoutes(obstacles.routes, obstacles.soft);
-      const hops = computePolylineHops(this.viewDoc.edges, routes);
-      for (const edge of this.viewDoc.edges) {
-        const els = this.edgeEls.get(edge.id);
-        const route = routes.get(edge.id);
-        if (!els || !route) continue;
-        const d = polylinePath(route.points, hops.get(edge.id));
-        els.line.setAttribute("d", d);
-        els.hit.setAttribute("d", d);
-        this.placeEdgeLabel(edge, pathMetrics(route.points));
-      }
-      return;
-    }
-    const routeObstacles = this.collectObstacles().routes;
-    const geos = new Map<string, EdgeGeometry>();
-    for (const edge of this.viewDoc.edges) {
-      const geo = this.edgeGeometryOf(edge, routeObstacles);
-      if (geo) geos.set(edge.id, geo);
-    }
-    const hops = computeHops(this.viewDoc.edges, geos);
+    const geometry = this.routeGeometry();
+    this.edgePaths = geometry.paths;
+    const orthogonal = this.routeStyle === "orthogonal";
     for (const edge of this.viewDoc.edges) {
       const els = this.edgeEls.get(edge.id);
-      const geo = geos.get(edge.id);
-      if (!els || !geo) continue;
-      const d = edgePath(geo, hops.get(edge.id));
+      const path = geometry.paths.get(edge.id);
+      const geo = geometry.geos.get(edge.id);
+      if (!els || !path || (!orthogonal && !geo)) continue;
+      const d = orthogonal
+        ? polylinePath(path.points, geometry.orthHops?.get(edge.id))
+        : edgePath(geo!, geometry.hops?.get(edge.id));
       els.line.setAttribute("d", d);
       els.hit.setAttribute("d", d);
-      if (geo.detour) this.placeEdgeLabel(edge, pathMetrics(geo.detour));
+      this.placeEdgeLabel(edge, path);
     }
   }
 
-  private placeEdgeLabel(edge: EdgeDecl, path: PolyPath): void {
+  private placeEdgeLabel(edge: EdgeDecl, path?: PathMetrics): void {
     const els = this.edgeEls.get(edge.id);
     if (!els) return;
+    const labelPath = path ?? this.edgePaths.get(edge.id);
+    if (!labelPath) return;
     const family = getComputedStyle(this.root).fontFamily;
     const font = `500 10.5px ${family}`;
     const text = truncate(edge.label ?? edge.title ?? "", font, 260);
@@ -1689,38 +1771,7 @@ class Viewer implements ViewerHandle {
     const width = textWidth(text, font);
     const t = (edge as EdgeDecl & { __labelT?: number }).__labelT ?? 0.5;
     const off = (edge as EdgeDecl & { __labelOff?: number }).__labelOff ?? 0;
-    const point = pointAtLength(path, t * path.total);
-    const bg = els.labelLayer.querySelector(".bml-edge-label-bg");
-    const label = els.labelLayer.querySelector(".bml-edge-label");
-    if (bg) {
-      bg.setAttribute("x", String(point.x - width / 2 - 5));
-      bg.setAttribute("y", String(point.y + off - 8.5));
-    }
-    if (label) {
-      label.setAttribute("x", String(point.x));
-      label.setAttribute("y", String(point.y + off + 3.6));
-    }
-  }
-
-  private refreshEdge(edge: EdgeDecl): void {
-    const els = this.edgeEls.get(edge.id);
-    const geo = this.edgeGeometryOf(edge, this.collectObstacles().routes);
-    if (!els || !geo) return;
-    const d = edgePath(geo);
-    els.line.setAttribute("d", d);
-    els.hit.setAttribute("d", d);
-    if (geo.detour) {
-      this.placeEdgeLabel(edge, pathMetrics(geo.detour));
-      return;
-    }
-    const family = getComputedStyle(this.root).fontFamily;
-    const font = `500 10.5px ${family}`;
-    const text = truncate(edge.label ?? edge.title ?? "", font, 260);
-    if (!text) return;
-    const width = textWidth(text, font);
-    const t = (edge as EdgeDecl & { __labelT?: number }).__labelT ?? 0.5;
-    const off = (edge as EdgeDecl & { __labelOff?: number }).__labelOff ?? 0;
-    const point = bezierAt(geo.p1, geo.control, geo.p2, t);
+    const point = pointAtLength(labelPath, t * labelPath.total);
     const bg = els.labelLayer.querySelector(".bml-edge-label-bg");
     const label = els.labelLayer.querySelector(".bml-edge-label");
     if (bg) {
@@ -1841,7 +1892,7 @@ class Viewer implements ViewerHandle {
 
   private updateAlignBar(): void {
     const selected = this.selectedVisibleNodes();
-    const open = !this.options.readOnly && selected.length >= 2;
+    const open = this.mode === "editing" && !this.options.readOnly && selected.length >= 2;
     this.alignBar.classList.toggle("bml-open", open);
     if (!open) return;
     const count = this.alignBar.querySelector(".bml-align-count");
@@ -1907,16 +1958,16 @@ class Viewer implements ViewerHandle {
 
   private refreshBendHandle(): void {
     this.overlayLayer.innerHTML = "";
-    if (this.routeStyle === "orthogonal" || !this.selectedEdge || !this.doc) return;
+    if (this.mode !== "editing" || this.routeStyle === "orthogonal" || !this.selectedEdge || !this.doc) {
+      return;
+    }
     const edge = this.doc.edges.find((e) => e.id === this.selectedEdge);
     if (!edge) return;
-    const geo = this.edgeGeometryOf(edge, this.collectObstacles().routes);
-    // A detour is auto-routed; there is no quadratic handle to drag.
-    if (!geo || geo.detour) return;
-    el("path", {
-      d: `M ${geo.mid.x} ${geo.mid.y} L ${geo.control.x} ${geo.control.y}`,
-      class: "bml-bend-line",
-    }, this.overlayLayer);
+    const { routes, soft } = this.collectObstacles();
+    const geo = this.edgeGeometryOf(edge, routes, soft);
+    // A detour is auto-routed and a bundle's apex belongs to the whole group;
+    // neither offers a single-edge handle.
+    if (!geo || geo.detour || this.junctions.has(edge.id)) return;
     const handle = el("circle", {
       cx: geo.control.x, cy: geo.control.y, r: 6.5, class: "bml-bend-handle",
     }, this.overlayLayer);
@@ -1976,11 +2027,13 @@ class Viewer implements ViewerHandle {
     const sections: string[] = [];
     if (edge.note) sections.push(`<h3>说明</h3><p>${escape(edge.note)}</p>`);
     if (edge.src) sections.push(`<h3>出处</h3><p><code>${escape(edge.src)}</code></p>`);
-    if (!this.options.readOnly) {
+    if (!this.options.readOnly && this.mode === "editing") {
       sections.push(
         this.routeStyle === "orthogonal"
-          ? `<h3>走线</h3><p>正交布线由节点位置自动生成（直角折线），拖动节点即可调整。</p>`
-          : `<h3>调整走线</h3><p>拖动画布上的圆点改变曲率，坐标会写回文件里的 <code>via</code>。</p>`,
+          ? `<h3>走线</h3><p>正交走线由节点位置自动生成；端口与出线方向由平台统一决定。</p>`
+          : this.junctions.has(edge.id)
+            ? `<h3>走线</h3><p>这条边属于 <code>bundle</code>，共享主干由组内连线共同决定。</p>`
+            : `<h3>调整走线</h3><p>拖动曲线中点改变曲率，坐标会写回文件里的 <code>via</code>；出线方向与端口由平台统一决定。</p>`,
       );
     }
 
@@ -2025,6 +2078,7 @@ class Viewer implements ViewerHandle {
   /* ----------------------------------------------------------- visibility */
 
   toggleLayers(open: boolean = !this.layersOpen): void {
+    if (this.mode !== "editing") return;
     this.layersOpen = open;
     this.layersPanel.classList.toggle("bml-open", open);
     if (open) this.renderLayersPanel();
@@ -2213,6 +2267,24 @@ class Viewer implements ViewerHandle {
     this.updateAlignBar();
   }
 
+  setMode(mode: "presentation" | "editing"): void {
+    if (this.mode === mode) return;
+    this.mode = mode;
+    this.root.classList.toggle("bml-presentation", mode === "presentation");
+    this.root.classList.toggle("bml-editing", mode === "editing");
+    if (mode === "presentation") {
+      this.toggleLayers(false);
+      this.layersOpen = false;
+      this.layersPanel.classList.remove("bml-open");
+      this.overlayLayer.innerHTML = "";
+    }
+    this.render();
+  }
+
+  getMode(): "presentation" | "editing" {
+    return this.mode;
+  }
+
   toSVG(): string {
     const clone = this.svg.cloneNode(true) as SVGSVGElement;
     clone.setAttribute("xmlns", SVGNS);
@@ -2296,63 +2368,6 @@ class Viewer implements ViewerHandle {
 
 /* --------------------------------------------------------------- helpers */
 
-interface PlacedLabel {
-  x: number;
-  y: number;
-  t: number;
-  offset: number;
-  rect: Rect;
-}
-
-function rectOverlapArea(a: Rect, b: Rect, pad: number): number {
-  const x0 = Math.max(a.x, b.x - pad);
-  const y0 = Math.max(a.y, b.y - pad);
-  const x1 = Math.min(a.x + a.w, b.x + b.w + pad);
-  const y1 = Math.min(a.y + a.h, b.y + b.h + pad);
-  return Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
-}
-
-function labelPenalty(rect: Rect, obstacles: Rect[], placed: Rect[]): number {
-  let penalty = 0;
-  for (const o of obstacles) penalty += rectOverlapArea(rect, o, 1) * 4;
-  for (const o of placed) penalty += rectOverlapArea(rect, o, 4);
-  return penalty;
-}
-
-function placeLabel(
-  geo: EdgeGeometry,
-  width: number,
-  height: number,
-  obstacles: Rect[],
-  placed: Rect[],
-): PlacedLabel {
-  const ts = [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74, 0.18, 0.82];
-  const offsets = [0, -15, 15, -30, 30, -46, 46, -64, 64];
-  let best: PlacedLabel | null = null;
-  let bestPenalty = Infinity;
-  for (const offset of offsets) {
-    for (const t of ts) {
-      const point = bezierAt(geo.p1, geo.control, geo.p2, t);
-      const rect: Rect = { x: point.x - width / 2 - 5, y: point.y - height / 2 + offset, w: width + 10, h: height };
-      const penalty = labelPenalty(rect, obstacles, placed);
-      if (penalty === 0) return { x: point.x, y: point.y + offset, t, offset, rect };
-      if (penalty < bestPenalty) {
-        bestPenalty = penalty;
-        best = { x: point.x, y: point.y + offset, t, offset, rect };
-      }
-    }
-  }
-  if (best) return best;
-  const point = bezierAt(geo.p1, geo.control, geo.p2, 0.5);
-  return {
-    x: point.x,
-    y: point.y,
-    t: 0.5,
-    offset: 0,
-    rect: { x: point.x - width / 2 - 5, y: point.y - height / 2, w: width + 10, h: height },
-  };
-}
-
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -2367,289 +2382,6 @@ function lightenHex(hex: string, amount: number): string {
   const g = mix((value >> 8) & 255);
   const b = mix(value & 255);
   return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
-}
-
-/* ------------------------------------------------------------ wire hops */
-
-const HOP_RADIUS = 9;
-const HOP_MIN_T = 0.05;
-const HOP_MAX_T = 0.95;
-
-function splitQuad(
-  p1: Point,
-  c: Point,
-  p2: Point,
-  t: number,
-): { left: [Point, Point, Point]; right: [Point, Point, Point] } {
-  const lerp = (a: Point, b: Point): Point => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
-  const p01 = lerp(p1, c);
-  const p12 = lerp(c, p2);
-  const p012 = lerp(p01, p12);
-  return { left: [p1, p01, p012], right: [p012, p12, p2] };
-}
-
-/** Sub-curve of a quadratic between parameters t0 and t1. */
-function subQuad(p1: Point, c: Point, p2: Point, t0: number, t1: number): [Point, Point, Point] {
-  const { left } = splitQuad(p1, c, p2, t1);
-  const k = t1 <= 0 ? 0 : t0 / t1;
-  const { right } = splitQuad(left[0], left[1], left[2], k);
-  return right;
-}
-
-function quadSpeed(geo: EdgeGeometry, t: number): number {
-  const dx = 2 * (1 - t) * (geo.control.x - geo.p1.x) + 2 * t * (geo.p2.x - geo.control.x);
-  const dy = 2 * (1 - t) * (geo.control.y - geo.p1.y) + 2 * t * (geo.p2.y - geo.control.y);
-  return Math.hypot(dx, dy);
-}
-
-interface EdgeSamples {
-  points: Point[];
-  box: Rect;
-}
-
-function sampleEdge(geo: EdgeGeometry, steps = 40): EdgeSamples {
-  const points: Point[] = [];
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (let i = 0; i <= steps; i++) {
-    const p = bezierAt(geo.p1, geo.control, geo.p2, i / steps);
-    points.push(p);
-    x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y);
-    x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y);
-  }
-  return { points, box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } };
-}
-
-function segmentHit(a1: Point, a2: Point, b1: Point, b2: Point): number | null {
-  const ax = a2.x - a1.x, ay = a2.y - a1.y;
-  const bx = b2.x - b1.x, by = b2.y - b1.y;
-  const denom = ax * by - ay * bx;
-  if (Math.abs(denom) < 1e-9) return null;
-  const ox = b1.x - a1.x, oy = b1.y - a1.y;
-  const ua = (ox * by - oy * bx) / denom;
-  const ub = (ox * ay - oy * ax) / denom;
-  if (ua <= 0 || ua >= 1 || ub <= 0 || ub >= 1) return null;
-  return ub;
-}
-
-/**
- * For every crossing between two edges, the edge drawn later (the one on top)
- * gets a hop. Returns hop parameters per edge id.
- */
-function computeHops(edges: EdgeDecl[], geos: Map<string, EdgeGeometry>): Map<string, number[]> {
-  const samples = new Map<string, EdgeSamples>();
-  for (const edge of edges) {
-    const geo = geos.get(edge.id);
-    // Detour edges are polylines; hop positions are computed for quadratics.
-    if (geo && !geo.detour) samples.set(edge.id, sampleEdge(geo));
-  }
-  const hops = new Map<string, number[]>();
-  for (let i = 0; i < edges.length; i++) {
-    const first = edges[i]!;
-    const a = samples.get(first.id);
-    if (!a) continue;
-    for (let j = i + 1; j < edges.length; j++) {
-      const second = edges[j]!;
-      const b = samples.get(second.id);
-      if (!b) continue;
-      if (
-        a.box.x + a.box.w < b.box.x || b.box.x + b.box.w < a.box.x ||
-        a.box.y + a.box.h < b.box.y || b.box.y + b.box.h < a.box.y
-      ) continue;
-      const shares =
-        first.from === second.from || first.from === second.to ||
-        first.to === second.from || first.to === second.to;
-      const found: number[] = [];
-      for (let s = 0; s < a.points.length - 1; s++) {
-        for (let k = 0; k < b.points.length - 1; k++) {
-          const ub = segmentHit(a.points[s]!, a.points[s + 1]!, b.points[k]!, b.points[k + 1]!);
-          if (ub === null) continue;
-          const t = (k + ub) / (b.points.length - 1);
-          if (shares && (t < 0.12 || t > 0.88)) continue;
-          found.push(t);
-        }
-      }
-      if (found.length) hops.set(second.id, [...(hops.get(second.id) ?? []), ...found]);
-    }
-  }
-  return hops;
-}
-
-/** Edge path with a small arc where this (top) edge crosses another one. */
-function edgePath(geo: EdgeGeometry, hops?: number[]): string {
-  if (geo.detour?.length) return polylinePath(geo.detour);
-  if (!hops?.length) return pathOf(geo);
-  const usable: number[] = [];
-  for (const t of [...hops].sort((a, b) => a - b)) {
-    if (t < HOP_MIN_T || t > HOP_MAX_T) continue;
-    const p = bezierAt(geo.p1, geo.control, geo.p2, t);
-    if (Math.hypot(p.x - geo.p1.x, p.y - geo.p1.y) < 22) continue;
-    if (Math.hypot(p.x - geo.p2.x, p.y - geo.p2.y) < 22) continue;
-    if (usable.length) {
-      const prev = bezierAt(geo.p1, geo.control, geo.p2, usable[usable.length - 1]!);
-      if (Math.hypot(p.x - prev.x, p.y - prev.y) < 18) continue;
-    }
-    usable.push(t);
-  }
-  if (!usable.length) return pathOf(geo);
-
-  const f = (n: number) => Number(n.toFixed(2));
-  const pointAt = (t: number) => bezierAt(geo.p1, geo.control, geo.p2, t);
-  let d = "";
-  let cursor = 0;
-  for (const t of usable) {
-    const half = Math.min(0.06, 7 / Math.max(quadSpeed(geo, t), 0.001));
-    const t0 = Math.max(cursor, t - half);
-    const t1 = Math.min(1, t + half);
-    if (t1 - t0 < 0.004) continue;
-    const [s0, s1, s2] = subQuad(geo.p1, geo.control, geo.p2, cursor, t0);
-    d += d
-      ? ` Q ${f(s1.x)} ${f(s1.y)} ${f(s2.x)} ${f(s2.y)}`
-      : `M ${f(s0.x)} ${f(s0.y)} Q ${f(s1.x)} ${f(s1.y)} ${f(s2.x)} ${f(s2.y)}`;
-    const b = pointAt(t1);
-    d += ` A ${HOP_RADIUS} ${HOP_RADIUS} 0 0 1 ${f(b.x)} ${f(b.y)}`;
-    cursor = t1;
-  }
-  const [, e1, e2] = subQuad(geo.p1, geo.control, geo.p2, cursor, 1);
-  return `${d} Q ${f(e1.x)} ${f(e1.y)} ${f(e2.x)} ${f(e2.y)}`;
-}
-
-/* --------------------------------------------------- orthogonal polylines */
-
-interface PolyPath {
-  points: Point[];
-  lengths: number[];
-  total: number;
-}
-
-function pathMetrics(points: Point[]): PolyPath {
-  const lengths = [0];
-  let total = 0;
-  for (let i = 1; i < points.length; i++) {
-    const a = points[i - 1]!;
-    const b = points[i]!;
-    total += Math.hypot(b.x - a.x, b.y - a.y);
-    lengths.push(total);
-  }
-  return { points, lengths, total };
-}
-
-function pointAtLength(path: PolyPath, distance: number): Point {
-  const s = Math.max(0, Math.min(path.total, distance));
-  for (let i = 1; i < path.points.length; i++) {
-    if (path.lengths[i]! >= s) {
-      const segStart = path.lengths[i - 1]!;
-      const k = (s - segStart) / Math.max(path.lengths[i]! - segStart, 1e-6);
-      const a = path.points[i - 1]!;
-      const b = path.points[i]!;
-      return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
-    }
-  }
-  return path.points[path.points.length - 1]!;
-}
-
-const CORNER_RADIUS = 12;
-
-function polylinePath(points: Point[], hops?: number[]): string {
-  const f = (n: number) => Number(n.toFixed(2));
-  if (points.length < 2) return "";
-  const path = pathMetrics(points);
-  // Round each bend; a corner never eats more than half of either neighbour, so
-  // narrow lane jogs stay smooth instead of turning into spikes.
-  const radiusAt = (index: number): number => {
-    if (index <= 0 || index >= points.length - 1) return 0;
-    const prev = path.lengths[index]! - path.lengths[index - 1]!;
-    const next = path.lengths[index + 1]! - path.lengths[index]!;
-    if (prev < 2 || next < 2) return 0;
-    return Math.min(CORNER_RADIUS, prev / 2, next / 2);
-  };
-  const at = (distance: number): Point => {
-    const s = Math.max(0, Math.min(path.total, distance));
-    for (let i = 1; i < points.length; i++) {
-      const end = path.lengths[i]!;
-      if (end >= s - 1e-6) {
-        const a = points[i - 1]!;
-        const b = points[i]!;
-        const len = end - path.lengths[i - 1]!;
-        const k = len < 1e-6 ? 0 : (s - path.lengths[i - 1]!) / len;
-        return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
-      }
-    }
-    return points[points.length - 1]!;
-  };
-
-  const cuts: number[] = [];
-  if (hops?.length) {
-    for (const t of [...hops].sort((a, b) => a - b)) {
-      const s = t * path.total;
-      if (s < 22 || s > path.total - 22) continue;
-      if (cuts.length && s - cuts[cuts.length - 1]! < 18) continue;
-      cuts.push(s);
-    }
-  }
-
-  let d = `M ${f(points[0]!.x)} ${f(points[0]!.y)}`;
-  let cut = 0;
-  for (let i = 1; i < points.length; i++) {
-    const segStart = path.lengths[i - 1]!;
-    const segEnd = path.lengths[i]!;
-    const endR = radiusAt(i);
-    while (cut < cuts.length && cuts[cut]! <= segEnd) {
-      const s = cuts[cut]!;
-      if (s >= segStart + radiusAt(i - 1) + 9 && s <= segEnd - endR - 9) {
-        const from = at(s - 7);
-        const to = at(s + 7);
-        d += ` L ${f(from.x)} ${f(from.y)} A 7 7 0 0 1 ${f(to.x)} ${f(to.y)}`;
-      }
-      cut++;
-    }
-    const end = at(segEnd - endR);
-    d += ` L ${f(end.x)} ${f(end.y)}`;
-    if (endR > 0) {
-      const corner = points[i]!;
-      const after = at(segEnd + endR);
-      d += ` Q ${f(corner.x)} ${f(corner.y)} ${f(after.x)} ${f(after.y)}`;
-    }
-  }
-  return d;
-}
-
-function computePolylineHops(
-  edges: EdgeDecl[],
-  routes: Map<string, OrthogonalRoute>,
-): Map<string, number[]> {
-  const paths = new Map<string, PolyPath>();
-  for (const edge of edges) {
-    const route = routes.get(edge.id);
-    if (route) paths.set(edge.id, pathMetrics(route.points));
-  }
-  const hops = new Map<string, number[]>();
-  for (let i = 0; i < edges.length; i++) {
-    const first = edges[i]!;
-    const a = paths.get(first.id);
-    if (!a) continue;
-    for (let j = i + 1; j < edges.length; j++) {
-      const second = edges[j]!;
-      const b = paths.get(second.id);
-      if (!b) continue;
-      const shares =
-        first.from === second.from || first.from === second.to ||
-        first.to === second.from || first.to === second.to;
-      const found: number[] = [];
-      for (let s = 0; s < a.points.length - 1; s++) {
-        for (let k = 0; k < b.points.length - 1; k++) {
-          const ub = segmentHit(a.points[s]!, a.points[s + 1]!, b.points[k]!, b.points[k + 1]!);
-          if (ub === null) continue;
-          const distance = b.lengths[k]! + ub * (b.lengths[k + 1]! - b.lengths[k]!);
-          const t = b.total ? distance / b.total : 0;
-          if (t < HOP_MIN_T || t > HOP_MAX_T) continue;
-          if (shares && (t < 0.12 || t > 0.88)) continue;
-          found.push(t);
-        }
-      }
-      if (found.length) hops.set(second.id, [...(hops.get(second.id) ?? []), ...found]);
-    }
-  }
-  return hops;
 }
 
 function segmentOverlapLength(a1: Point, a2: Point, b1: Point, b2: Point): number {
@@ -2737,85 +2469,6 @@ function sharedPort(a: Point[], b: Point[]): { axis: "h" | "v" } | null {
     }
   }
   return null;
-}
-
-function placeLabelOnPath(
-  path: PolyPath,
-  width: number,
-  height: number,
-  obstacles: Rect[],
-  placed: Rect[],
-  range?: [number, number],
-  avoid?: boolean[],
-): PlacedLabel {
-  const candidates: { t: number; offset: number }[] = [];
-  const seen = new Set<string>();
-  const push = (t: number, offset: number) => {
-    const key = `${t.toFixed(3)}:${offset}`;
-    if (!t || t <= 0 || t >= 1 || seen.has(key)) return;
-    seen.add(key);
-    candidates.push({ t, offset });
-  };
-  const inRange = (t: number) => !range || (t >= range[0] && t <= range[1]);
-  // The pill is as wide as the label, so check the whole span it covers, not
-  // just the anchor point.
-  const pad = (width / 2 + 6) / Math.max(1, path.total);
-  const avoided = (t: number) => {
-    if (!avoid) return false;
-    const last = avoid.length - 1;
-    const lo = Math.max(0, Math.round((t - pad) * last));
-    const hi = Math.min(last, Math.round((t + pad) * last));
-    for (let i = lo; i <= hi; i++) if (avoid[i]) return true;
-    return false;
-  };
-  // Straight runs read best: try the middle of the longest ones first, sitting
-  // the label just above the line (or just below when above is taken).
-  const runs: { t: number; length: number; horizontal: boolean }[] = [];
-  for (let i = 0; i < path.points.length - 1; i++) {
-    const a = path.points[i]!;
-    const b = path.points[i + 1]!;
-    const length = Math.hypot(b.x - a.x, b.y - a.y);
-    if (length < width + 18) continue;
-    const mid = path.lengths[i]! + length / 2;
-    runs.push({ t: path.total ? mid / path.total : 0, length, horizontal: Math.abs(a.y - b.y) < 0.5 });
-  }
-  runs.sort((a, b) => Number(b.horizontal) - Number(a.horizontal) || b.length - a.length);
-  for (const run of runs) {
-    if (!inRange(run.t) || avoided(run.t)) continue;
-    push(run.t, -12);
-    push(run.t, 14);
-  }
-  const ts = [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74, 0.18, 0.82];
-  const offsets = [0, -15, 15, -30, 30, -46, 46, -64, 64];
-  for (const offset of offsets) for (const t of ts) if (inRange(t) && !avoided(t)) push(t, offset);
-  if (!candidates.length) for (const offset of offsets) for (const t of ts) if (inRange(t)) push(t, offset);
-  if (!candidates.length) for (const offset of offsets) for (const t of ts) push(t, offset);
-  let best: PlacedLabel | null = null;
-  let bestPenalty = Infinity;
-  for (const { t, offset } of candidates) {
-    const point = pointAtLength(path, t * path.total);
-    const rect: Rect = {
-      x: point.x - width / 2 - 5,
-      y: point.y - height / 2 + offset,
-      w: width + 10,
-      h: height,
-    };
-    const penalty = labelPenalty(rect, obstacles, placed);
-    if (penalty === 0) return { x: point.x, y: point.y + offset, t, offset, rect };
-    if (penalty < bestPenalty) {
-      bestPenalty = penalty;
-      best = { x: point.x, y: point.y + offset, t, offset, rect };
-    }
-  }
-  if (best) return best;
-  const point = pointAtLength(path, path.total * 0.5);
-  return {
-    x: point.x,
-    y: point.y,
-    t: 0.5,
-    offset: 0,
-    rect: { x: point.x - width / 2 - 5, y: point.y - height / 2, w: width + 10, h: height },
-  };
 }
 
 function escape(text: string): string {

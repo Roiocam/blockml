@@ -3,27 +3,18 @@
 
 diagram {
   title: "订单平台 · 架构示例"
-  subtitle: "diagram-as-code · 拖动节点或选中连线后拖中点"
+  subtitle: "diagram-as-code · 布局与样式由平台负责，拖完仍是同一份文件"
 }
 
-group access "接入层" {
-  color: #f59e0b
-}
+group access "接入层"
 
-group core "核心服务" {
-  color: #4f46e5
-}
+group core "核心服务"
 
-group data "数据面" {
-  color: #10b981
-}
+group data "数据面"
 
-group partner "外部合作方" {
-  color: #8b5cf6
-}
+group partner "外部合作方"
 
 node storefront "web-storefront" {
-  at: 80, 80
   group: access
   kind: ui
   tech: "React SPA · /shop"
@@ -32,7 +23,6 @@ node storefront "web-storefront" {
 }
 
 node gateway "api-gateway" {
-  at: 80, 198
   group: access
   kind: service
   tech: "Spring Cloud Gateway · 8080"
@@ -41,7 +31,6 @@ node gateway "api-gateway" {
 }
 
 node console "ops-console" {
-  at: 80, 316
   group: access
   kind: ui
   tech: "内部控制台 · /ops"
@@ -49,7 +38,6 @@ node console "ops-console" {
 }
 
 node order "order-service" {
-  at: 390, 80
   group: core
   kind: service
   tech: "Go 1.22 · 8081"
@@ -60,7 +48,6 @@ node order "order-service" {
 }
 
 node inventory "inventory-service" {
-  at: 390, 198
   group: core
   kind: service
   tech: "Go 1.22 · 8082"
@@ -69,7 +56,6 @@ node inventory "inventory-service" {
 }
 
 node payment "payment-service" {
-  at: 390, 316
   group: core
   kind: service
   tech: "Go 1.22 · 8083"
@@ -78,7 +64,6 @@ node payment "payment-service" {
 }
 
 node worker "event-worker" {
-  at: 390, 434
   group: core
   kind: service
   tech: "Go 1.22 · 后台消费"
@@ -86,7 +71,6 @@ node worker "event-worker" {
 }
 
 node analytics "analytics-service" {
-  at: 390, 552
   group: core
   kind: service
   tech: "Python 3.12 · 只读"
@@ -94,7 +78,6 @@ node analytics "analytics-service" {
 }
 
 node pg "PostgreSQL" {
-  at: 700, 80
   group: data
   kind: db
   tech: "orders · 主从"
@@ -103,7 +86,6 @@ node pg "PostgreSQL" {
 }
 
 node redis "Redis" {
-  at: 700, 198
   group: data
   kind: cache
   tech: "库存预扣 · 会话"
@@ -111,7 +93,6 @@ node redis "Redis" {
 }
 
 node stripe "Stripe" {
-  at: 1010, 80
   group: partner
   kind: ext
   tech: "支付渠道 · HTTPS"
@@ -120,7 +101,6 @@ node stripe "Stripe" {
 }
 
 node mailer "SendGrid" {
-  at: 1010, 198
   group: partner
   kind: ext
   tech: "邮件投递 · HTTPS"
@@ -170,12 +150,10 @@ edge inventory -> redis "热点" {
 
 edge payment -> stripe "PaymentIntent" {
   kind: rest
-  via: 0, -50
 }
 
 edge payment -> pg "payment_ref" {
   kind: sql
-  via: 70, 0
 }
 
 edge order -> worker "领域事件" {

@@ -2,7 +2,7 @@ import { readFile, writeFile, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { applyLayout, hasErrors, layoutDocument, parse, serialize, LAYOUT_ALGORITHMS, LAYOUT_LABELS } from "@block-ml/core";
-import type { Diagnostic, LayoutAlgorithm } from "@block-ml/core";
+import type { Diagnostic, LayoutAlgorithm, RouteStyle } from "@block-ml/core";
 import { renderStandaloneHTML, VIEWER_CSS } from "@block-ml/viewer";
 
 const require = createRequire(import.meta.url);
@@ -22,6 +22,7 @@ const HELP = `blockml — diagram-as-code for architecture maps
       --title <text>     阅读器标题（默认取 diagram.title / 文件名）
       --theme <light|dark>
       --readonly         只读：禁止拖动写回
+      --route <style>    打开时的走线预设：curve | orthogonal（覆盖文件里的 legacy route）
       --algo <name>      layout 算法：layered | pipeline | snowflake | compact
   -h, --help
 
@@ -38,6 +39,7 @@ interface Args {
   readOnly?: boolean;
   write?: boolean;
   algo?: string;
+  route?: string;
   help?: boolean;
 }
 
@@ -53,6 +55,7 @@ function parseArgs(argv: string[]): Args {
     else if (token === "--readonly") args.readOnly = true;
     else if (token === "--write") args.write = true;
     else if (token === "--algo") args.algo = argv[++i];
+    else if (token === "--route") args.route = argv[++i];
     else if (token.startsWith("-")) throw new Error(`未知选项：${token}`);
     else rest.push(token);
   }
@@ -124,6 +127,15 @@ async function cmdRender(args: Args): Promise<number> {
     return 1;
   }
 
+  let route: RouteStyle | undefined;
+  if (args.route) {
+    if (args.route !== "curve" && args.route !== "orthogonal") {
+      console.error(`未知走线预设：${args.route}，可用：curve | orthogonal`);
+      return 2;
+    }
+    route = args.route;
+  }
+
   const out = args.out
     ? resolve(args.out)
     : join(dirname(resolve(file)), basename(file, extname(file)) + ".html");
@@ -137,6 +149,8 @@ async function cmdRender(args: Args): Promise<number> {
     theme: args.theme ?? (document.diagram?.theme === "dark" ? "dark" : "light"),
     viewerScript,
     viewerCss: VIEWER_CSS,
+    mode: "presentation",
+    route,
     readOnly: args.readOnly ?? false,
   });
 

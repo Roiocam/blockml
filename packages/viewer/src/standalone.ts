@@ -1,3 +1,4 @@
+import type { RouteStyle } from "@block-ml/core";
 import type { ViewerVisibility } from "./viewer.js";
 
 export interface StandaloneOptions {
@@ -8,6 +9,10 @@ export interface StandaloneOptions {
   viewerScript: string;
   viewerCss: string;
   readOnly?: boolean;
+  /** Delivered figures open in presentation; the bar switches to editing. */
+  mode?: "presentation" | "editing";
+  /** Viewer-level route preset; overrides the legacy `diagram.route` key. */
+  route?: RouteStyle;
   /** Initial view state; collapsed / hidden items stay view-only and are not written back. */
   visibility?: ViewerVisibility;
 }
@@ -38,6 +43,11 @@ export function renderStandaloneHTML(options: StandaloneOptions): string {
   const title = options.title ?? "BlockML";
   const theme = options.theme ?? "light";
   const readOnly = options.readOnly ?? false;
+  const mode = options.mode ?? "presentation";
+  const routeOption = options.route ? `,\n    route: "${options.route}"` : "";
+  const modeButton = readOnly
+    ? ""
+    : `<button data-act="mode" title="切换编辑 / 预览">${mode === "presentation" ? "编辑" : "预览"}</button>`;
   const script = options.viewerScript.replace(/<\/script/gi, "<\\/script");
   const sourceJson = jsonForScript(options.source);
   const visibilityJson = options.visibility ? jsonForScript(options.visibility) : null;
@@ -59,6 +69,7 @@ export function renderStandaloneHTML(options: StandaloneOptions): string {
     border-bottom:1px solid ${theme === "dark" ? "#1e293b" : "#e2e8f0"};
     backdrop-filter:blur(8px);
   }
+  #blockml-app[data-mode="presentation"] .bml-editing-only{display:none}
   #blockml-bar .grow{flex:1}
   #blockml-bar .name{font-weight:650;color:${theme === "dark" ? "#e2e8f0" : "#0f172a"};font-size:12.5px}
   #blockml-bar .badge{font:500 10px/1 ui-monospace,monospace;padding:3px 6px;border-radius:5px;
@@ -86,13 +97,14 @@ ${options.viewerCss}
 </style>
 </head>
 <body>
-<div id="blockml-app">
+<div id="blockml-app" data-mode="${mode}">
   <div id="blockml-bar">
     <span class="name">${escapeHtml(title)}</span>
     <span class="badge">.blockml</span>
     <span class="grow"></span>
-    <button data-act="layers" title="显示 / 隐藏分组与节点">图层</button>
-    <select id="blockml-layout" title="重新排列（会覆盖手工坐标）">
+    ${modeButton}
+    <button data-act="layers" class="bml-editing-only" title="显示 / 隐藏分组与节点">图层</button>
+    <select id="blockml-layout" class="bml-editing-only" title="重新排列（会覆盖手工坐标）">
       <option value="">手工布局</option>
       <option value="layered">从左到右</option>
       <option value="pipeline">Pipeline</option>
@@ -115,7 +127,8 @@ ${visibilityJson ? `<script id="blockml-visibility" type="application/json">${vi
   var handle = BlockML.mount(document.getElementById("blockml-mount"), {
     source: source,
     theme: "${theme}",
-    readOnly: ${readOnly}
+    mode: "${mode}",
+    readOnly: ${readOnly}${routeOption}
   });
   var initialEl = document.getElementById("blockml-visibility");
   if (initialEl) {
@@ -127,8 +140,16 @@ ${visibilityJson ? `<script id="blockml-visibility" type="application/json">${vi
   // Expose the handle for debugging and for embedding pages that want to script it.
   window.blockmlViewer = handle;
   window.__blockmlGetSource = function(){ return handle.getSource(); };
+  var app = document.getElementById("blockml-app");
   var actions = {
     "fit": function(){ handle.fit(); },
+    "mode": function(){
+      var next = handle.getMode() === "presentation" ? "editing" : "presentation";
+      handle.setMode(next);
+      app.setAttribute("data-mode", next);
+      var button = document.querySelector('[data-act="mode"]');
+      if (button) button.textContent = next === "presentation" ? "编辑" : "预览";
+    },
     "layers": function(){ handle.toggleLayers(); },
     "zoom-in": function(){ handle.zoomTo(handle.getView().k * 1.25); },
     "zoom-out": function(){ handle.zoomTo(handle.getView().k / 1.25); },
